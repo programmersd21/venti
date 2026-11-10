@@ -1,0 +1,47 @@
+[package]
+name = "venti"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "fast quiet terminal multiplexer (linux only)"
+repository = "https://github.com/programmersd21/venti"
+documentation = "https://github.com/programmersd21/venti/tree/main/docs"
+keywords = ["terminal", "multiplexer", "tmux", "tui", "linux"]
+categories = ["command-line-utilities", "terminal"]
+
+[lib]
+name = "venti"
+path = "src/lib.rs"
+
+[[bin]]
+name = "venti"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.22"
+clap = { version = "4.6.7", features = ["derive"] }
+clap_complete = "4.6.11"
+crossbeam-channel = "0.5.17"
+crossterm = "0.29.0"
+directories = "6.0.0"
+nix = { version = "0.31.3", features = ["hostname"] }
+notify = "8.2.2"
+portable-pty = "0.9.0"
+postcard = { version = "1.1.3", features = ["alloc"] }
+ratatui = "0.30.2"
+rustix = { version = "1.1.6", features = ["net", "process", "termios", "fs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+signal-hook = "0.4.6"
+thiserror = "2.0.21"
+time = { version = "0.3.55", features = ["local-offset"] }
+toml = "0.8"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unicode-width = "0.2.3"
+vt100 = { package = "term-wm-vt100", version = "0.16.2-patch6" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.12.0"
