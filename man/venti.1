@@ -1,0 +1,303 @@
+.TH venti 1 "2026-11-16" "venti 0.1.0" "user commands"
+.SH name
+venti \- terminal multiplexer
+
+.SH synopsis
+.B venti
+.br
+.B venti new
+[\fB\-s\fR \fIname\fR]
+.br
+.B venti attach
+[\fB\-t\fR \fIname\fR] [\fB\-d\fR]
+.br
+.B venti ls
+.br
+.B venti kill
+\fB\-t\fR \fIname\fR
+.br
+.B venti send
+[\fB\-t\fR \fIname\fR] \fIkeys\fR
+.br
+.B venti paste
+[\fB\-t\fR \fIname\fR] [\fB\-\-stdin\fR]
+.br
+.B venti config
+{\fBinit\fR|\fBcheck\fR|\fBpath\fR}
+.br
+.B venti doctor
+.br
+.B venti completions
+\fIshell\fR
+.br
+.B venti kill-server
+.br
+.B venti man
+
+.SH description
+.B venti
+is a linux-only terminal multiplexer. client/server over local unix domain sockets.
+
+starts daemon, manages sessions, panes, ptys. detach cleanly. reattach later.
+
+dwindle tiling (binary splits, aspect-aware). workspaces. floating windows.
+layout persists on restart.
+
+mouse: click, drag, wheel. f-keys everywhere.
+
+terminal graphics (sixel, kitty, iterm2) are experimental and may be
+unreliable across terminal emulators, particularly on resize, scroll and
+layout changes. graphics is on by default; set graphics = false in
+~/.config/venti/config.toml if images glitch, or turn it off from f2 -> graphics.
+venti doctor prints the same reminder.
+
+.SH commands
+.TP
+.B venti
+attach default session
+
+.TP
+.B venti run -t default workspace_goto 2
+switch to workspace 2 via command line
+
+.TP
+.B venti run -t default close_workspace 2 3
+close workspaces 2 and 3
+
+.TP
+.B venti run -t default move_to_workspace 4
+move focused pane to workspace 4
+
+
+.TP
+.B venti new \-s \fIname\fR
+create and attach named session
+
+.TP
+.B venti attach \-t \fIname\fR
+attach to session
+
+.TP
+.B venti attach \-d \-t \fIname\fR
+attach, kick off other clients
+
+.TP
+.B venti ls
+list sessions
+
+.TP
+.B venti kill \-t \fIname\fR
+terminate session
+
+.TP
+.B venti send \-t \fIname\fR \fIkeys\fR
+send keys to pane
+
+.TP
+.B venti paste \-t \fIname\fR
+paste clipboard to pane (or stdin with \fB\-\-stdin\fR)
+
+.TP
+.B venti config init
+create config at ~/.config/venti/config.toml
+
+.TP
+.B venti config check
+validate config
+
+.TP
+.B venti config path
+show config path
+
+.TP
+.B venti doctor
+check terminal capabilities
+
+.TP
+.B venti completions \fIshell\fR
+generate completions (bash|fish|zsh|elvish)
+
+.TP
+.B venti kill-server
+stop the background daemon; kills every session and removes stale sockets
+
+.TP
+.B venti man
+print the manual page (this page)
+
+.SH inside venti
+.TP
+.B f1
+help
+
+.TP
+.B f2
+settings
+
+.TP
+.B f3
+split
+
+.TP
+.B f4
+close pane
+
+.TP
+.B f5
+zoom
+
+.TP
+.B f6
+float/tile
+
+.TP
+.B f7
+scratchpad
+
+.TP
+.B f8
+search
+
+.TP
+.B f9
+copy mode
+
+.TP
+.B f10
+resize mode
+
+.TP
+.B f11
+palette
+
+.TP
+.B f12
+theme
+
+.TP
+.B :
+vim commands
+
+.TP
+.B alt+h/j/k/l
+focus
+
+.TP
+.B alt+shift+left/right
+move pane to workspace
+
+.TP
+.B alt+n
+new workspace
+
+.TP
+.B alt+1-9
+goto workspace
+
+.TP
+.B alt+shift+1-9
+move pane to workspace
+
+.TP
+.B alt+q
+close pane
+
+.TP
+.B alt+shift+q
+kill session
+
+.TP
+.B shift+tab
+fold the workspace sidebar away
+
+.TP
+.B right click a workspace tab
+open the tab context menu (new, rename, close workspace)
+
+.SH config
+~/.config/venti/config.toml
+
+sections: [general] [profile] [layout] [input] [decorations] [animation] [ui] [theme] [binds]
+
+[profile] mode: "beginner" (default) | "hypr" | "vim" | "dev", four distinct keybinding personalities; f2 switches live
+
+.SH files
+.TP
+~/.config/venti/config.toml
+config
+
+.TP
+~/.local/state/venti/
+state: logs, persisted session layout
+
+.TP
+~/.local/state/venti/venti.log
+log
+
+.TP
+$XDG_RUNTIME_DIR/venti/<uid>/
+sockets
+
+.SH environment
+.TP
+.B TERM
+terminal type
+
+.TP
+.B SHELL
+shell for panes
+
+.TP
+.B XDG_CONFIG_HOME
+config dir
+
+.TP
+.B XDG_STATE_HOME
+state dir (logs, session layout); default ~/.local/state
+
+.TP
+.B XDG_RUNTIME_DIR
+socket dir
+
+.TP
+.B NO_COLOR
+disable cli color (any value)
+
+.TP
+.B CLICOLOR
+set to 0 to disable cli color
+
+.TP
+.B CLICOLOR_FORCE
+force cli color even when piped (checked before NO_COLOR)
+
+.SH examples
+.TP
+.B venti
+start default session
+
+.TP
+.B venti new -s work
+create work session
+
+.TP
+.B venti ls
+list sessions
+
+.TP
+.B venti attach -t work
+attach to work
+
+.TP
+.B venti doctor
+check terminal
+
+.TP
+.B venti config init
+create config
+
+.SH version
+venti 0.1.0
+
+.SH license
+mit
