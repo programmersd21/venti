@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: verify tag matches cargo.toml version
+        run: |
+          pkg="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          if [ "v$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $pkg" >&2
+            exit 1
+          fi
+
+      - name: install rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: test
+        run: cargo test --locked
+
+      - name: build
+        run: cargo build --release --locked
+
+      - name: smoke check
+        run: ./target/release/venti --version
+
+      - name: package
+        run: |
+          pkg="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          dir="venti-${pkg}-linux-x86_64"
+          mkdir -p "$dir/completions" "$dir/man"
+          cp target/release/venti "$dir/"
+          cp license readme.md changelog.md "$dir/"
+          cp completions/venti.bash completions/venti.fish completions/_venti completions/venti.elv "$dir/completions/"
+          cp man/venti.1 "$dir/man/"
+          tar -czf "${dir}.tar.gz" "$dir"
+          sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
+
+      - name: notes
+        run: |
+          pkg="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          awk -v ver="[$pkg]" -v foot="[$pkg]:" 'index($0, "## " ver) == 1 {f=1; next} index($0, foot) == 1 && f {exit} /^## \[/ && f {exit} f' changelog.md > release-notes.md
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pkg="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          dir="venti-${pkg}-linux-x86_64"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "venti $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            "${dir}.tar.gz" "${dir}.tar.gz.sha256"

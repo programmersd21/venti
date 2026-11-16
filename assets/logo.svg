@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="160" viewBox="0 0 560 160" fill="none">
+  <title>venti logo</title>
+  <desc>venti terminal multiplexer logo.</desc>
+
+  <g transform="translate(95 0)">
+    <rect x="16" y="16" width="128" height="128" rx="30" fill="#282828"/>
+    <rect x="34" y="34" width="43" height="92" rx="11" fill="#EBDBB2"/>
+    <rect x="85" y="34" width="41" height="41" rx="10" fill="#EBDBB2"/>
+    <rect x="85" y="85" width="41" height="41" rx="10" fill="#98971A"/>
+
+    <text x="164" y="108"
+      fill="#282828"
+      font-family="Inter, Geist, sans-serif"
+      font-size="76"
+      font-weight="650"
+      letter-spacing="-4">venti</text>
+  </g>
+</svg>

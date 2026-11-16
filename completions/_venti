@@ -1,0 +1,275 @@
+#compdef venti
+
+autoload -U is-at-least
+
+_venti() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_venti_commands" \
+"*::: :->venti" \
+&& ret=0
+    case $state in
+    (venti)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:venti-command-$line[1]:"
+        case $line[1] in
+            (server)
+_arguments "${_arguments_options[@]}" : \
+'-s+[session name to start server for]:SESSION:_default' \
+'--session=[session name to start server for]:SESSION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(new)
+_arguments "${_arguments_options[@]}" : \
+'-s+[session name to create (default\: default)]:SESSION:_default' \
+'--session=[session name to create (default\: default)]:SESSION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+'-t+[session name to attach to (default\: default)]:TARGET:_default' \
+'--target=[session name to attach to (default\: default)]:TARGET:_default' \
+'-d[disconnect other clients]' \
+'--detach-others[disconnect other clients]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(ls)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+'-t+[session name to terminate]:TARGET:_default' \
+'--target=[session name to terminate]:TARGET:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(kill-server)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+'-t+[session name to send to (default\: default)]:TARGET:_default' \
+'--target=[session name to send to (default\: default)]:TARGET:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::keys -- keys or shell command to send to focused pane:_default' \
+&& ret=0
+;;
+(run)
+_arguments "${_arguments_options[@]}" : \
+'-t+[session name to target (default\: default)]:TARGET:_default' \
+'--target=[session name to target (default\: default)]:TARGET:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::command -- the command to run, e.g. `venti run "workspace_goto 3"` or `venti run move_to_workspace 2`:_default' \
+&& ret=0
+;;
+(paste)
+_arguments "${_arguments_options[@]}" : \
+'-t+[session name to paste to (default\: default)]:TARGET:_default' \
+'--target=[session name to paste to (default\: default)]:TARGET:_default' \
+'--stdin[read from stdin instead of clipboard]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_venti__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:venti-config-command-$line[1]:"
+        case $line[1] in
+            (init)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(path)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::shell -- shell to generate completions for:((bash\:"bash shell"
+elvish\:"elvish shell"
+fish\:"fish shell"
+zsh\:"zsh shell"))' \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_venti_commands] )) ||
+_venti_commands() {
+    local commands; commands=(
+'server:internal daemon server mode (hidden)' \
+'new:create and attach to new session' \
+'attach:attach to existing session' \
+'ls:list all running sessions' \
+'kill:kill a session' \
+'kill-server:stop the background daemon' \
+'send:send keys or commands to pane' \
+'run:run a command against the session (same as typing it in the palette)' \
+'paste:paste to focused pane' \
+'config:manage venti configuration' \
+'doctor:check terminal\: TERM, colors, graphics' \
+'completions:output shell completions (bash|fish|zsh|elvish)' \
+'man:display man page' \
+    )
+    _describe -t commands 'venti commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__attach_commands] )) ||
+_venti__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti attach commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__completions_commands] )) ||
+_venti__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti completions commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__config_commands] )) ||
+_venti__subcmd__config_commands() {
+    local commands; commands=(
+'init:create default ~/.config/venti/config.toml' \
+'check:check config file for errors' \
+'path:show config file path' \
+    )
+    _describe -t commands 'venti config commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__config__subcmd__check_commands] )) ||
+_venti__subcmd__config__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti config check commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__config__subcmd__init_commands] )) ||
+_venti__subcmd__config__subcmd__init_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti config init commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__config__subcmd__path_commands] )) ||
+_venti__subcmd__config__subcmd__path_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti config path commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__doctor_commands] )) ||
+_venti__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti doctor commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__kill_commands] )) ||
+_venti__subcmd__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti kill commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__kill-server_commands] )) ||
+_venti__subcmd__kill-server_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti kill-server commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__ls_commands] )) ||
+_venti__subcmd__ls_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti ls commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__man_commands] )) ||
+_venti__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti man commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__new_commands] )) ||
+_venti__subcmd__new_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti new commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__paste_commands] )) ||
+_venti__subcmd__paste_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti paste commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__run_commands] )) ||
+_venti__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti run commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__send_commands] )) ||
+_venti__subcmd__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti send commands' commands "$@"
+}
+(( $+functions[_venti__subcmd__server_commands] )) ||
+_venti__subcmd__server_commands() {
+    local commands; commands=()
+    _describe -t commands 'venti server commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_venti" ]; then
+    _venti "$@"
+else
+    compdef _venti venti
+fi
