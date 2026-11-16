@@ -7,6 +7,10 @@
 > [!NOTE]\
 > terminal graphics support is currently experimental and may be unreliable. contributions and help with protocol compatibility, rendering bugs, and testing are very welcome. see [graphics protocol support](#graphics-protocol-support).
 
+## demo
+
+[![venti demo](https://img.youtube.com/vi/GsD61wQLam0/hqdefault.jpg)](https://youtu.be/GsD61wQLam0)
+
 ## features
 
 - **multiple workspaces**: organize panes across independent workspace sets
