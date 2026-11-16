@@ -9,7 +9,7 @@
 
 ## demo
 
-[![venti demo](https://img.youtube.com/vi/GsD61wQLam0/hqdefault.jpg)](https://youtu.be/GsD61wQLam0)
+[![venti demo](https://img.youtube.com/vi/GsD61wQLam0/maxresdefault.jpg)](https://youtu.be/GsD61wQLam0)
 
 ## features
 
