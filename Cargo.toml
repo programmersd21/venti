@@ -7,7 +7,7 @@ description = "fast quiet terminal multiplexer (linux only)"
 repository = "https://github.com/programmersd21/venti"
 documentation = "https://github.com/programmersd21/venti/tree/main/docs"
 keywords = ["terminal", "multiplexer", "tmux", "tui", "linux"]
-categories = ["command-line-utilities", "terminal"]
+categories = ["command-line-utilities"]
 
 [lib]
 name = "venti"
