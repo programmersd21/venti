@@ -3,15 +3,14 @@
   <br>
   fast, quiet terminal multiplexer for linux.
   <br><br>
-  <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&logo=githubactions&logoColor=a6e3a1&label=build&color=a6e3a1&labelColor=1e1e2e" alt="build" /></a>
-  <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&logo=rust&logoColor=cba6f7&color=cba6f7&labelColor=1e1e2e" alt="crates.io" /></a>
-  <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=f9e2af&color=f9e2af&labelColor=1e1e2e" alt="license" /></a>
-  <a href="https://github.com/programmersd21/venti/issues"><img src="https://img.shields.io/github/issues/programmersd21/venti?style=for-the-badge&logo=github&logoColor=cdd6f4&color=f38ba8&labelColor=1e1e2e" alt="issues" /></a>
-  <a href="https://github.com/programmersd21/venti/stargazers"><img src="https://img.shields.io/github/stars/programmersd21/venti?style=for-the-badge&logo=github&logoColor=cdd6f4&color=f9e2af&labelColor=1e1e2e" alt="stars" /></a>
-  <a href="https://github.com/programmersd21/venti/commits/main"><img src="https://img.shields.io/github/last-commit/programmersd21/venti?style=for-the-badge&logo=git&logoColor=cdd6f4&color=a6e3a1&labelColor=1e1e2e" alt="last commit" /></a>
-  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/github/repo-size/programmersd21/venti?style=for-the-badge&logo=github&logoColor=cdd6f4&color=89b4fa&labelColor=1e1e2e" alt="repo size" /></a>
-  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=fab387&labelColor=1e1e2e" alt="rust" /></a>
-  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/badge/terminal-multiplexer-94e2d5?style=for-the-badge&logo=gnometerminal&logoColor=94e2d5&labelColor=1e1e2e" alt="terminal multiplexer" /></a>
+  <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&logo=githubactions&logoColor=1e1e2e&label=build&color=a6e3a1&labelColor=313244" alt="build" /></a>
+  <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&logo=rust&logoColor=1e1e2e&color=cba6f7&labelColor=313244" alt="crates.io" /></a>
+  <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=1e1e2e&color=f9e2af&labelColor=313244" alt="license" /></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=1e1e2e&labelColor=313244" alt="rust" /></a>
+  <a href="https://github.com/programmersd21/venti/issues"><img src="https://img.shields.io/github/issues/programmersd21/venti?style=for-the-badge&logo=github&logoColor=1e1e2e&color=f38ba8&labelColor=313244" alt="issues" /></a>
+  <a href="https://github.com/programmersd21/venti/stargazers"><img src="https://img.shields.io/github/stars/programmersd21/venti?style=for-the-badge&logo=github&logoColor=1e1e2e&color=f9e2af&labelColor=313244" alt="stars" /></a>
+  <a href="https://github.com/programmersd21/venti/commits/main"><img src="https://img.shields.io/github/last-commit/programmersd21/venti?style=for-the-badge&logo=git&logoColor=1e1e2e&color=a6e3a1&labelColor=313244" alt="last commit" /></a>
+  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/github/repo-size/programmersd21/venti?style=for-the-badge&logo=github&logoColor=1e1e2e&color=89b4fa&labelColor=313244" alt="repo size" /></a>
 </p>
 
 > [!NOTE]\
