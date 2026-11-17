@@ -11,7 +11,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use venti::proto::{
-    ClientMsg, HelloMsg, PROTOCOL_VERSION, ServerMsg, decode_from_slice, write_msg,
+    ClientMsg, HelloMsg, PROTOCOL_VERSION, ProtoColor, ServerMsg, decode_from_slice, write_msg,
 };
 
 struct ServerGuard {
@@ -40,6 +40,7 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> bool {
 
 struct Frame {
     gfx: Vec<Vec<u8>>,
+    cells: Vec<venti::proto::CellDiff>,
 }
 
 fn collect_frames(
@@ -63,6 +64,7 @@ fn collect_frames(
                     if let ServerMsg::Update(update) = msg {
                         let frame = Frame {
                             gfx: update.gfx.iter().map(|g| g.data.clone()).collect(),
+                            cells: update.cells,
                         };
                         if stop(&frame) {
                             frames.push(frame);
@@ -85,6 +87,14 @@ fn frame_has_kitty(frame: &Frame) -> bool {
         .any(|d| d.windows(3).any(|w| w == b"\x1b_G"))
 }
 
+fn frame_has_indexed_placeholder_ids(frame: &Frame) -> bool {
+    frame.cells.iter().any(|cell| {
+        cell.symbol.starts_with('\u{10eeee}')
+            && cell.fg != ProtoColor::Indexed(7)
+            && cell.underline_color == ProtoColor::Indexed(5)
+    })
+}
+
 #[test]
 fn kitty_image_reappears_after_resize() {
     let root = std::env::temp_dir().join(format!("venti-kitty-resize-{}", std::process::id()));
@@ -95,6 +105,11 @@ fn kitty_image_reappears_after_resize() {
     fs::create_dir_all(&run_dir).expect("run dir");
     fs::create_dir_all(config_dir.join("venti")).expect("config dir");
     fs::create_dir_all(&home_dir).expect("home dir");
+    fs::write(
+        home_dir.join("placeholder.sh"),
+        r#"printf '\033_Ga=T,f=100,s=1,v=1,i=7,p=5,U=1,c=1,r=1,q=2;iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\033\\'; printf '\033[38;5;7m\033[58;5;5m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85\033[39m\n'"#,
+    )
+    .expect("write placeholder script");
     fs::write(
         config_dir.join("venti").join("config.toml"),
         "[ui]\nshow_welcome = false\n[general]\ngraphics = true\n",
@@ -166,6 +181,40 @@ fn kitty_image_reappears_after_resize() {
     assert!(
         frames.iter().any(frame_has_kitty),
         "the kitty image never reached the client"
+    );
+
+    write_msg(
+        &mut stream,
+        &ClientMsg::Input(b"sh \"$HOME/placeholder.sh\"\r".to_vec()),
+    )
+    .expect("input placeholder");
+    let before_placeholder = frames.len();
+    collect_frames(
+        &mut stream,
+        &mut read_buf,
+        Instant::now() + Duration::from_secs(4),
+        &mut frames,
+        &frame_has_indexed_placeholder_ids,
+    );
+    assert!(
+        frames[before_placeholder..]
+            .iter()
+            .any(frame_has_indexed_placeholder_ids),
+        "low indexed image or placement ids did not survive the complete screen pipeline"
+    );
+    assert!(
+        frames[before_placeholder..].iter().any(|frame| {
+            frame
+                .gfx
+                .iter()
+                .any(|data| data.windows(3).any(|window| window == b"U=1"))
+        }),
+        "the virtual image placement was not transmitted to the client: {:?}",
+        frames[before_placeholder..]
+            .iter()
+            .flat_map(|frame| frame.gfx.iter())
+            .map(|data| String::from_utf8_lossy(data).into_owned())
+            .collect::<Vec<_>>()
     );
 
     // resize the client: the vt100 reflows, ED2 wipes the placement, and the

@@ -96,16 +96,22 @@ impl<'a> Widget for PaneView<'a> {
                 let contents = c.contents();
                 let vt_fg = c.fgcolor();
                 let vt_bg = c.bgcolor();
+                let vt_underline = c.underlinecolor();
                 let bold = c.bold();
                 let italic = c.italic();
                 let underline = c.underline();
                 let reverse = c.inverse();
                 let wide = c.is_wide();
+                let is_kitty_placeholder = contents.starts_with('\u{10EEEE}');
 
-                let mut fg_color = map_vt_color(vt_fg, self.theme);
+                let mut fg_color = if is_kitty_placeholder {
+                    map_vt_color_raw(vt_fg)
+                } else {
+                    map_vt_color(vt_fg, self.theme)
+                };
                 let mut bg_color = map_vt_color(vt_bg, self.theme);
 
-                if reverse {
+                if reverse && !is_kitty_placeholder {
                     std::mem::swap(&mut fg_color, &mut bg_color);
                 }
 
@@ -131,10 +137,10 @@ impl<'a> Widget for PaneView<'a> {
                 });
                 let is_search = search_state
                     .is_some_and(|s| logical_opt.is_some_and(|l| s.is_match(l, col as usize)));
-                if is_current_search {
+                if is_current_search && !is_kitty_placeholder {
                     bg_color = self.theme.accent_color();
                     fg_color = self.theme.base_color();
-                } else if is_search {
+                } else if is_search && !is_kitty_placeholder {
                     bg_color = self.theme.warn_color();
                     fg_color = self.theme.base_color();
                 }
@@ -142,7 +148,6 @@ impl<'a> Widget for PaneView<'a> {
                 // dim inactive panes, but never kitty unicode-placeholder cells:
                 // their fg carries the image id and dimming it would break the
                 // placeholder→image association (and the image would vanish).
-                let is_kitty_placeholder = contents.starts_with('\u{10EEEE}');
                 if !self.is_focused && self.dim_inactive && !is_kitty_placeholder {
                     fg_color = dim_color(fg_color, self.theme.muted, self.dim_strength);
                     if bg_color != Color::Reset {
@@ -162,7 +167,15 @@ impl<'a> Widget for PaneView<'a> {
                     &self.kitty_id_map,
                 );
 
-                let mut style = Style::default().fg(fg_color).bg(bg_color);
+                let underline_color = if is_kitty_placeholder {
+                    map_vt_color_raw(vt_underline)
+                } else {
+                    map_vt_color(vt_underline, self.theme)
+                };
+                let mut style = Style::default()
+                    .fg(fg_color)
+                    .bg(bg_color)
+                    .underline_color(underline_color);
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -290,6 +303,14 @@ fn map_vt_color(c: vt100::Color, theme: &Theme) -> Color {
     }
 }
 
+fn map_vt_color_raw(c: vt100::Color) -> Color {
+    match c {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(i) => Color::Indexed(i),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
 fn dim_color(color: Color, base: RgbColor, factor: f64) -> Color {
     match color {
         Color::Rgb(r, g, b) => {
@@ -297,5 +318,134 @@ fn dim_color(color: Color, base: RgbColor, factor: f64) -> Color {
             rgb.to_ratatui()
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaneView;
+    use crate::config::theme::Theme;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use ratatui::widgets::Widget;
+    use std::collections::HashMap;
+
+    #[test]
+    fn underline_color_survives_semicolon_sgr_parse_and_render() {
+        let mut parser = vt100::Parser::new(1, 2, 0);
+        parser.process(b"\x1b[58;2;17;34;51mX\x1b[59mY");
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 1));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::new(),
+        }
+        .render(Rect::new(0, 0, 2, 1), &mut buffer);
+
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
+        assert_eq!(buffer[(1, 0)].underline_color, Color::Reset);
+    }
+
+    #[test]
+    fn indexed_underline_color_survives_terminal_parse_and_render() {
+        let mut parser = vt100::Parser::new(1, 1, 0);
+        parser.process(b"\x1b[58;5;42mX");
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::new(),
+        }
+        .render(Rect::new(0, 0, 1, 1), &mut buffer);
+
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(42));
+    }
+
+    #[test]
+    fn underline_color_survives_colon_sgr_parse_and_render() {
+        let mut parser = vt100::Parser::new(1, 2, 0);
+        parser.process(b"\x1b[58:2::17:34:51mX");
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 1));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::new(),
+        }
+        .render(Rect::new(0, 0, 2, 1), &mut buffer);
+
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
+    }
+
+    #[test]
+    fn kitty_placeholder_keeps_placement_id_while_remapping_image_id() {
+        let mut parser = vt100::Parser::new(1, 2, 0);
+        parser.process("\x1b[38;2;0;0;42m\x1b[58;2;0;0;7m\u{10eeee}\u{0305}\u{0305}".as_bytes());
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 1));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::from([((false, 42), 0x0001_0203)]),
+        }
+        .render(Rect::new(0, 0, 2, 1), &mut buffer);
+
+        assert_eq!(buffer[(0, 0)].fg, Color::Rgb(1, 2, 3));
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(0, 0, 7));
+    }
+
+    #[test]
+    fn kitty_placeholder_uses_low_index_colors_as_ids_before_theme_mapping() {
+        let mut parser = vt100::Parser::new(1, 1, 0);
+        parser.process(b"\x1b[38;5;7m\x1b[58;5;5m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85");
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::from([((false, 7), 0x0001_0203)]),
+        }
+        .render(Rect::new(0, 0, 1, 1), &mut buffer);
+
+        assert_eq!(buffer[(0, 0)].fg, Color::Rgb(1, 2, 3));
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(5));
     }
 }

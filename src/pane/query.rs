@@ -53,6 +53,8 @@ pub struct QueryResponder {
     buf: Vec<u8>,
     string_state: Option<u8>,
     string_esc: bool,
+    string_is_apc: bool,
+    apc_overflow: bool,
     /// set when an OSC introducer (`ESC ]`) is seen; holds the collected
     /// payload until BEL or ST arrives.
     osc_state: Option<PendingOsc>,
@@ -88,6 +90,8 @@ impl QueryResponder {
             buf: Vec::with_capacity(256),
             string_state: None,
             string_esc: false,
+            string_is_apc: false,
+            apc_overflow: false,
             osc_state: None,
             osc_buf: Vec::with_capacity(32),
             osc_esc: false,
@@ -121,6 +125,8 @@ impl QueryResponder {
             buf: Vec::with_capacity(256),
             string_state: None,
             string_esc: false,
+            string_is_apc: false,
+            apc_overflow: false,
             osc_state: None,
             osc_buf: Vec::with_capacity(32),
             osc_esc: false,
@@ -161,11 +167,26 @@ impl QueryResponder {
             }
             if let Some(terminator) = self.string_state {
                 if b == terminator || (self.string_esc && b == b'\\') {
+                    if self.string_is_apc && !self.apc_overflow {
+                        if b == b'\\' && self.string_esc {
+                            self.buf.pop();
+                        }
+                        self.respond_kitty_query(&self.buf, pty_writer);
+                    }
                     self.string_state = None;
                     self.string_esc = false;
+                    self.string_is_apc = false;
+                    self.apc_overflow = false;
                     self.buf.clear();
                 } else {
                     self.string_esc = b == 0x1b;
+                    if self.string_is_apc && !self.apc_overflow {
+                        self.buf.push(b);
+                        if self.buf.len() > MAX_QUERY_BUF {
+                            self.buf.clear();
+                            self.apc_overflow = true;
+                        }
+                    }
                 }
                 continue;
             }
@@ -187,6 +208,14 @@ impl QueryResponder {
             if self.buf.ends_with(b"\x1bP") {
                 self.string_state = Some(0x07);
                 self.string_esc = false;
+                self.buf.clear();
+                continue;
+            }
+            if self.buf.ends_with(b"\x1b_") {
+                self.string_state = Some(0x07);
+                self.string_esc = false;
+                self.string_is_apc = true;
+                self.apc_overflow = false;
                 self.buf.clear();
                 continue;
             }
@@ -348,17 +377,19 @@ impl QueryResponder {
     }
 
     fn respond_kitty_query<W: Write + ?Sized>(&self, payload: &[u8], pty_writer: &mut W) {
-        let Ok(s) = std::str::from_utf8(&payload[1..]) else {
+        let Some(payload) = payload.strip_prefix(b"G") else {
+            return;
+        };
+        let Ok(s) = std::str::from_utf8(payload) else {
             return;
         };
         // only explicit capability queries (a=q) may be answered; never respond to
         // transmit/display commands, which carry no query intent.
-        let mut img_id: Option<String> = None;
+        let mut img_id = None;
         let mut is_query = false;
-        // track which features are being queried (e=T means Unicode placeholder query)
+        let mut feature_action = None;
         let mut queried_unicode_placeholder = false;
         let mut queried_cursor_policy = false;
-        let mut data_format: Option<String> = None;
 
         for part in s.split(';') {
             for kv in part.split(',') {
@@ -368,19 +399,15 @@ impl QueryResponder {
                 match k {
                     "a" => is_query = v == "q",
                     "i" => {
-                        if !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric()) {
-                            img_id = Some(v.to_string());
-                        } else {
-                            return; // reject unverifiable ids rather than echo them
+                        let Ok(id) = v.parse::<u32>() else { return };
+                        if id == 0 {
+                            return;
                         }
+                        img_id = Some(id);
                     }
-                    // feature probes from yazi/kitty apps:
-                    // e=T probes Unicode placeholder support
-                    "e" if v == "T" => queried_unicode_placeholder = true,
-                    // C=1 probes cursor movement policy
+                    "e" => feature_action = Some(v),
+                    "U" if v == "1" => queried_unicode_placeholder = true,
                     "C" if v == "1" => queried_cursor_policy = true,
-                    // t=d probes direct-file transfer
-                    "t" if v == "d" => data_format = Some("d".to_string()),
                     _ => {}
                 }
             }
@@ -388,7 +415,9 @@ impl QueryResponder {
         if !is_query {
             return;
         }
-        let img_id = img_id.unwrap_or_else(|| "1".to_string());
+        let Some(img_id) = img_id else {
+            return;
+        };
 
         // if the outer terminal can't do kitty graphics (or it can't be known
         // from inside tmux), answer with an error so applications fall back
@@ -405,14 +434,14 @@ impl QueryResponder {
         // C=1: cursor movement policy (images don't move cursor)
         // e=T: Unicode placeholder confirmed
         let mut resp = format!("\x1b_Gi={img_id}");
-        if queried_unicode_placeholder {
-            resp.push_str(",e=T,U=1");
-        }
-        if queried_cursor_policy {
-            resp.push_str(",C=1");
-        }
-        if data_format.is_some() {
-            resp.push_str(",t=d");
+        if feature_action == Some("T") {
+            resp.push_str(",e=T");
+            if queried_unicode_placeholder {
+                resp.push_str(",U=1");
+            }
+            if queried_cursor_policy {
+                resp.push_str(",C=1");
+            }
         }
         resp.push_str(";OK\x1b\\");
 

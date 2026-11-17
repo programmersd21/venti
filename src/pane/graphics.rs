@@ -607,38 +607,43 @@ impl GraphicCommand {
         let (pixels, payload) = self.kitty_control_and_payload()?;
         let (full_w, full_h) = kitty_pixel_dimensions(&pixels, payload)?;
         let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
-        let cell_w = cell_w.max(1) as i32;
-        let cell_h = cell_h.max(1) as i32;
+        let cell_w = i64::from(cell_w.max(1));
+        let cell_h = i64::from(cell_h.max(1));
 
-        let src_x0 = metadata.x.unwrap_or(0) as i32;
-        let src_y0 = metadata.y.unwrap_or(0) as i32;
-        let src_w = metadata.w.unwrap_or(full_w) as i32;
-        let src_h = metadata.h.unwrap_or(full_h) as i32;
+        let src_x0 = i64::from(metadata.x.unwrap_or(0));
+        let src_y0 = i64::from(metadata.y.unwrap_or(0));
+        let src_w = i64::from(metadata.w.unwrap_or(full_w));
+        let src_h = i64::from(metadata.h.unwrap_or(full_h));
 
         // the placement occupies this many cells
         let place_cols = metadata
             .c
-            .map(|c| c as i32)
-            .or_else(|| self.placement_bounds().and_then(|b| b.cols).map(i32::from))
-            .unwrap_or_else(|| div_ceil_i32(src_w, cell_w));
+            .map(i64::from)
+            .or_else(|| self.placement_bounds().and_then(|b| b.cols).map(i64::from))
+            .unwrap_or_else(|| i64::from(div_ceil_u32(src_w as u32, cell_w as u32)));
         let place_rows = metadata
             .r
-            .map(|r| r as i32)
-            .or_else(|| self.placement_bounds().and_then(|b| b.rows).map(i32::from))
-            .unwrap_or_else(|| div_ceil_i32(src_h, cell_h));
+            .map(i64::from)
+            .or_else(|| self.placement_bounds().and_then(|b| b.rows).map(i64::from))
+            .unwrap_or_else(|| i64::from(div_ceil_u32(src_h as u32, cell_h as u32)));
         let place_cols = place_cols.max(1);
         let place_rows = place_rows.max(1);
 
         // the placement's origin in pane cells (the row is relative to the
         // live grid, the scroll offset moves the viewport up into history)
-        let origin_col = i32::from(self.col);
-        let origin_row = self.row + scroll_offset as i32;
+        let origin_col = i64::from(self.col);
+        let origin_row =
+            i64::from(self.row).saturating_add(i64::try_from(scroll_offset).unwrap_or(i64::MAX));
 
         // the visible part of the placement inside the pane
         let vis_x0 = origin_col.max(0);
         let vis_y0 = origin_row.max(0);
-        let vis_x1 = (origin_col + place_cols).min(i32::from(pane_cols));
-        let vis_y1 = (origin_row + place_rows).min(i32::from(pane_rows));
+        let vis_x1 = origin_col
+            .saturating_add(place_cols)
+            .min(i64::from(pane_cols));
+        let vis_y1 = origin_row
+            .saturating_add(place_rows)
+            .min(i64::from(pane_rows));
         if vis_x1 <= vis_x0 || vis_y1 <= vis_y0 {
             // nothing of the placement is inside the pane
             return None;
@@ -658,14 +663,14 @@ impl GraphicCommand {
         // crop at the wrong pixels and the host drew a black rectangle.
         let px_per_col = src_w as f64 / place_cols as f64;
         let px_per_row = src_h as f64 / place_rows as f64;
-        let cut_x = ((vis_x0 - origin_col) as f64 * px_per_col).round() as i32;
-        let cut_y = ((vis_y0 - origin_row) as f64 * px_per_row).round() as i32;
+        let cut_x = ((vis_x0 - origin_col) as f64 * px_per_col).round() as i64;
+        let cut_y = ((vis_y0 - origin_row) as f64 * px_per_row).round() as i64;
         let crop_w = (((vis_x1 - vis_x0) as f64) * px_per_col)
             .round()
-            .min((src_w - cut_x).max(1) as f64) as i32;
+            .min((src_w - cut_x).max(1) as f64) as i64;
         let crop_h = (((vis_y1 - vis_y0) as f64) * px_per_row)
             .round()
-            .min((src_h - cut_y).max(1) as f64) as i32;
+            .min((src_h - cut_y).max(1) as f64) as i64;
 
         let del_ctl = KittyControlData {
             a: Some("d".to_string()),
@@ -682,12 +687,12 @@ impl GraphicCommand {
             q: Some(2),
             ..Default::default()
         };
-        place_ctl.c = Some((vis_x1 - vis_x0) as u32);
-        place_ctl.r = Some((vis_y1 - vis_y0) as u32);
-        place_ctl.x = Some((src_x0 + cut_x) as u32);
-        place_ctl.y = Some((src_y0 + cut_y) as u32);
-        place_ctl.w = Some(crop_w as u32);
-        place_ctl.h = Some(crop_h as u32);
+        place_ctl.c = Some(u32::try_from(vis_x1 - vis_x0).ok()?);
+        place_ctl.r = Some(u32::try_from(vis_y1 - vis_y0).ok()?);
+        place_ctl.x = Some(src_x0.saturating_add(cut_x).clamp(0, i64::from(u32::MAX)) as u32);
+        place_ctl.y = Some(src_y0.saturating_add(cut_y).clamp(0, i64::from(u32::MAX)) as u32);
+        place_ctl.w = Some(u32::try_from(crop_w.max(1)).ok()?);
+        place_ctl.h = Some(u32::try_from(crop_h.max(1)).ok()?);
         place_ctl.z = metadata.z;
         place_ctl.X = metadata.X;
         place_ctl.Y = metadata.Y;
@@ -697,8 +702,8 @@ impl GraphicCommand {
         out.extend_from_slice(&kitty_apc(&place_ctl));
         Some((
             out,
-            vis_x0.clamp(0, i32::from(pane_cols.saturating_sub(1))) as u16,
-            vis_y0.clamp(0, i32::from(pane_rows.saturating_sub(1))) as u16,
+            u16::try_from(vis_x0.clamp(0, i64::from(pane_cols.saturating_sub(1)))).ok()?,
+            u16::try_from(vis_y0.clamp(0, i64::from(pane_rows.saturating_sub(1)))).ok()?,
         ))
     }
 
@@ -1950,10 +1955,6 @@ fn fit_pixel_size(
     (width, height)
 }
 
-fn div_ceil_i32(numerator: i32, denominator: i32) -> i32 {
-    numerator.div_euclid(denominator) + i32::from(numerator % denominator != 0)
-}
-
 fn div_ceil_u32(numerator: u32, denominator: u32) -> u32 {
     numerator / denominator + u32::from(!numerator.is_multiple_of(denominator))
 }
@@ -2509,6 +2510,22 @@ mod placement_tests {
         );
         assert!(text.contains("h=20"), "source height is one cell: {text}");
         assert!(text.contains("r=1"), "placement occupies one row: {text}");
+    }
+
+    #[test]
+    fn crop_placement_handles_hostile_source_coordinate_arithmetic() {
+        let mut parser = GraphicsParser::new();
+        let mut segments =
+            parser.split(b"\x1b_Ga=p,i=7,s=2,v=2,c=1,r=2,y=2147483647,h=2147483647;AAAA\x1b\\");
+        let Segment::Graphic(command) = &mut segments[0] else {
+            panic!("expected kitty placement");
+        };
+        command.row = -1;
+
+        let (data, _, _) = command
+            .crop_placement(1, 1, 0)
+            .expect("partially visible placement must be cropped");
+        assert!(String::from_utf8_lossy(&data).contains("y=3221225471"));
     }
 
     #[test]

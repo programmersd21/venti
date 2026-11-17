@@ -43,6 +43,7 @@ fn bench_codec_roundtrip(c: &mut Criterion) {
                 symbol: "a".to_string(),
                 fg: venti::proto::ProtoColor::Default,
                 bg: venti::proto::ProtoColor::Default,
+                underline_color: venti::proto::ProtoColor::Default,
                 bold: false,
                 dim: false,
                 italic: false,

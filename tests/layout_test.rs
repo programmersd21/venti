@@ -72,7 +72,11 @@ proptest! {
     fn test_layout_tiling_invariants(
         w in 40u16..300,
         h in 20u16..100,
-        splits in proptest::collection::vec((0..2u8, 0.1f32..0.9f32), 1..8)
+        splits in proptest::collection::vec(
+            (0..2u8, 100u16..900u16)
+                .prop_map(|(axis, ratio)| (axis, f32::from(ratio) / 1000.0)),
+            1..8
+        )
     ) {
         let area = Rect::new(0, 0, w, h);
         let mut tree = LayoutNode::leaf(PaneId(1));

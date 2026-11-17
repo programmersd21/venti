@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use thiserror::Error;
 
 /// current wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// maximum payload frame size allowed (32 mib). scrolled/fullscreen images
 /// can legitimately exceed 1 mib (a 60x30 kitty image base64 encodes to ~5 mib),

@@ -28,6 +28,21 @@ pub enum OuterGraphics {
 }
 
 /// maps a terminal name (TERM or TERM_PROGRAM) to its graphics capability.
+/// converts a graphics capability code (from the query responder) back to
+/// an `OuterGraphics` value.
+pub fn from_code(code: u8) -> OuterGraphics {
+    if code & (1 << 1) != 0 {
+        return OuterGraphics::Kitty;
+    }
+    if code & (1 << 0) != 0 {
+        return OuterGraphics::Sixel;
+    }
+    if code & (1 << 2) != 0 {
+        return OuterGraphics::Iterm2;
+    }
+    OuterGraphics::Unknown
+}
+
 pub fn from_term_name(term: &str) -> Option<OuterGraphics> {
     let t = term.to_lowercase();
     if t.contains("kitty") || t.contains("ghostty") || t.contains("wezterm") {

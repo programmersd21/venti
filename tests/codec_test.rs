@@ -1,12 +1,13 @@
 use proptest::prelude::*;
 use venti::proto::{
-    CellDiff, ClientMsg, CursorShape, HelloMsg, ScreenUpdate, ServerMsg, decode_from_slice, encode,
+    CellDiff, ClientMsg, CursorShape, HelloMsg, PROTOCOL_VERSION, ScreenUpdate, ServerMsg,
+    decode_from_slice, encode,
 };
 
 #[test]
 fn test_roundtrip_codec() {
     let hello = ClientMsg::Hello(HelloMsg {
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
         term: "xterm-256color".to_string(),
         colorterm: Some("truecolor".to_string()),
         size: (80, 24),
@@ -33,6 +34,7 @@ fn test_roundtrip_codec() {
             symbol: "a".to_string(),
             fg: venti::proto::ProtoColor::Rgb(255, 0, 0),
             bg: venti::proto::ProtoColor::Default,
+            underline_color: venti::proto::ProtoColor::Rgb(17, 34, 51),
             bold: true,
             dim: false,
             italic: false,

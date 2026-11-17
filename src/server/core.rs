@@ -843,6 +843,7 @@ impl ServerCore {
                     }
                     let hello = ServerMsg::HelloAck {
                         session: self.session.name.clone(),
+                        graphics: crate::pane::query::graphics_code(self.session.outer_graphics),
                     };
                     if write_msg(&mut client.stream, &hello).is_err() {
                         tracing::error!(

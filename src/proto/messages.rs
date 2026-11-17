@@ -48,6 +48,7 @@ pub struct CellDiff {
     pub symbol: String,
     pub fg: ProtoColor,
     pub bg: ProtoColor,
+    pub underline_color: ProtoColor,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -148,6 +149,10 @@ pub enum ClientMsg {
 pub enum ServerMsg {
     HelloAck {
         session: String,
+        /// graphics capability of the outer terminal, so the client does not
+        /// have to guess from its own environment (which may be wrong when
+        /// venti is started by a different terminal than the client).
+        graphics: u8,
     },
     Update(ScreenUpdate),
     SetTitle(String),

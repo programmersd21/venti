@@ -151,8 +151,14 @@ pub fn run_client(socket_path: &Path, _session_name: &str) -> Result<(), String>
                                     let _ = out.write_all(&bytes);
                                     let _ = out.flush();
                                 }
-                                ServerMsg::HelloAck { .. } => {
+                                ServerMsg::HelloAck { graphics, .. } => {
                                     saw_server_msg = true;
+                                    // trust the server's detection of the outer
+                                    // terminal: the client's own environment
+                                    // may be wrong (e.g. TERM=xterm-256color
+                                    // inside a pane).
+                                    apply_state.gfx_passthrough =
+                                        crate::util::outer_term::from_code(graphics);
                                 }
                             }
                         }

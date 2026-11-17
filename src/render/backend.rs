@@ -133,7 +133,11 @@ impl Backend for ClientBackend {
             }
         };
         for (x, y, cell) in content {
-            let (fg, bg) = (to_proto(cell.fg), to_proto(cell.bg));
+            let (fg, bg, underline_color) = (
+                to_proto(cell.fg),
+                to_proto(cell.bg),
+                to_proto(cell.underline_color),
+            );
 
             let modifier = cell.modifier;
             self.pending_diffs.push(CellDiff {
@@ -142,6 +146,7 @@ impl Backend for ClientBackend {
                 symbol: cell.symbol().to_string(),
                 fg,
                 bg,
+                underline_color,
                 bold: modifier.contains(ratatui::style::Modifier::BOLD),
                 dim: modifier.contains(ratatui::style::Modifier::DIM),
                 italic: modifier.contains(ratatui::style::Modifier::ITALIC),
@@ -202,5 +207,31 @@ impl Backend for ClientBackend {
 
     fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientBackend;
+    use ratatui::backend::Backend;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+
+    #[test]
+    fn draw_carries_underline_color_into_screen_diff() {
+        let mut backend = ClientBackend::new(1, 1);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 1, 1));
+        buffer[(0, 0)]
+            .set_style(ratatui::style::Style::default().underline_color(Color::Rgb(17, 34, 51)));
+        backend
+            .draw(std::iter::once((0, 0, &buffer[(0, 0)])))
+            .expect("cell draw succeeds");
+
+        let update = backend.take_screen_update();
+        assert_eq!(
+            update.cells[0].underline_color,
+            crate::proto::ProtoColor::Rgb(17, 34, 51)
+        );
     }
 }

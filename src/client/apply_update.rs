@@ -1,6 +1,6 @@
 use crossterm::QueueableCommand;
 use crossterm::cursor::{Hide, MoveTo, SetCursorStyle, Show};
-use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
+use crossterm::style::{Attribute, SetAttribute};
 use crossterm::terminal::{BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
 use std::borrow::Cow;
 use std::io::{Stdout, Write};
@@ -28,11 +28,20 @@ impl ColorState {
     }
 }
 
-fn to_crossterm(c: ColorState) -> Color {
-    match c {
-        ColorState::Rgb(r, g, b) => Color::Rgb { r, g, b },
-        ColorState::Indexed(i) => Color::AnsiValue(i),
-        _ => Color::Reset,
+fn write_color<W: Write>(out: &mut W, selector: u8, color: ColorState) -> std::io::Result<()> {
+    match color {
+        ColorState::Default => {
+            let reset = match selector {
+                38 => 39,
+                48 => 49,
+                58 => 59,
+                _ => return Ok(()),
+            };
+            write!(out, "\x1b[{reset}m")
+        }
+        ColorState::Rgb(r, g, b) => write!(out, "\x1b[{selector};2;{r};{g};{b}m"),
+        ColorState::Indexed(index) => write!(out, "\x1b[{selector};5;{index}m"),
+        ColorState::Unknown => Ok(()),
     }
 }
 
@@ -41,6 +50,7 @@ fn to_crossterm(c: ColorState) -> Color {
 pub struct ApplyState {
     fg: ColorState,
     bg: ColorState,
+    underline_color: ColorState,
     modifiers: u8,
     cursor_visible: Option<bool>,
     cursor_shape: Option<CursorShape>,
@@ -141,6 +151,7 @@ fn apply_update_inner<W: Write>(
         out.write_all(b"\x1b[!p")?;
         state.fg = ColorState::Unknown;
         state.bg = ColorState::Unknown;
+        state.underline_color = ColorState::Unknown;
         state.modifiers = 0;
         state.cursor_visible = None;
         state.cursor_shape = None;
@@ -158,8 +169,7 @@ fn apply_update_inner<W: Write>(
         // ensure background & foreground colors and attributes are reset before clearing,
         // preventing BCE (Background Color Erase) from painting the screen with a stale/gray background.
         out.queue(SetAttribute(Attribute::Reset))?;
-        out.queue(SetForegroundColor(Color::Reset))?;
-        out.queue(SetBackgroundColor(Color::Reset))?;
+        out.write_all(b"\x1b[39m\x1b[49m\x1b[59m")?;
         out.queue(Clear(ClearType::All))?;
         // note: kitty graphics images live in a separate image plane and are
         // NOT erased by ed. the application owns their lifetime (it deletes
@@ -168,6 +178,7 @@ fn apply_update_inner<W: Write>(
         // (U=1), which re-appear by re-writing the placeholder cells.
         state.fg = ColorState::Default;
         state.bg = ColorState::Default;
+        state.underline_color = ColorState::Default;
         state.modifiers = 0;
         state.cursor_visible = None;
         state.cursor_shape = None;
@@ -195,6 +206,7 @@ fn apply_update_inner<W: Write>(
             // the very next cell that also wants default colors.
             state.fg = ColorState::Default;
             state.bg = ColorState::Default;
+            state.underline_color = ColorState::Default;
 
             if modifiers & BOLD != 0 {
                 out.queue(SetAttribute(Attribute::Bold))?;
@@ -219,14 +231,20 @@ fn apply_update_inner<W: Write>(
 
         let fg = ColorState::from_proto(cell.fg);
         if fg != state.fg {
-            out.queue(SetForegroundColor(to_crossterm(fg)))?;
+            write_color(out, 38, fg)?;
             state.fg = fg;
         }
 
         let bg = ColorState::from_proto(cell.bg);
         if bg != state.bg {
-            out.queue(SetBackgroundColor(to_crossterm(bg)))?;
+            write_color(out, 48, bg)?;
             state.bg = bg;
+        }
+
+        let underline_color = ColorState::from_proto(cell.underline_color);
+        if underline_color != state.underline_color {
+            write_color(out, 58, underline_color)?;
+            state.underline_color = underline_color;
         }
 
         let symbol = safe_cell_symbol(&cell.symbol);
@@ -253,33 +271,20 @@ fn apply_update_inner<W: Write>(
         }
     }
 
-    // after all cells and graphics are drawn, explicitly reset cursor shape to block
-    // if a reset was queued. This ensures the cursor returns to venti's block cursor
-    // after child processes like yazi exit, since a soft reset does not reliably
-    // restore cursor shape.
-    // we do this BEFORE applying the cursor position so the block shape is already set.
-    if update.reset {
-        out.write_all(b"\x1b[2 q")?; // DECSCUSR 2: steady block cursor
-        out.write_all(b"\x1b[?12l")?; // Reset DECSET mode 12 (disable cursor blink)
-        // force the next cursor shape command to be re-sent even if it looks the same,
-        // since we just reset the terminal's cursor state.
-        state.cursor_shape = None;
-    }
+    // Child applications and shell integrations can change the host cursor
+    // without changing this client's cache. Reassert it on every update,
+    // including modal frames that hide the cursor.
+    let style = match update.cursor_shape {
+        CursorShape::Default | CursorShape::Block => SetCursorStyle::SteadyBlock,
+        CursorShape::Underline => SetCursorStyle::SteadyUnderScore,
+        CursorShape::Bar => SetCursorStyle::SteadyBar,
+    };
+    out.queue(style)?;
+    state.cursor_shape = Some(update.cursor_shape);
 
     if update.cursor_visible
         && let Some((x, y)) = update.cursor_pos
     {
-        let style = match update.cursor_shape {
-            CursorShape::Default => SetCursorStyle::SteadyBlock,
-            CursorShape::Block => SetCursorStyle::SteadyBlock,
-            CursorShape::Underline => SetCursorStyle::SteadyUnderScore,
-            CursorShape::Bar => SetCursorStyle::SteadyBar,
-        };
-        // Child applications and terminal shell integrations can change the
-        // host cursor without changing this client's cache. Reassert the
-        // active shape each frame so a stale cache cannot leave a beam cursor.
-        out.queue(style)?;
-        state.cursor_shape = Some(update.cursor_shape);
         if state.cursor_visible != Some(true) {
             out.queue(Show)?;
             state.cursor_visible = Some(true);
@@ -399,7 +404,7 @@ pub fn wrap_tmux_passthrough(seq: &[u8]) -> Vec<u8> {
 mod tests {
     use super::{ApplyState, kitty_image_ids, safe_cell_symbol, safe_terminal_title};
     use crate::client::terminal::KittyImageId;
-    use crate::proto::{CursorShape, ScreenUpdate};
+    use crate::proto::{CursorShape, ProtoColor, ScreenUpdate};
 
     #[test]
     fn cursor_style_is_reasserted_even_when_cached_value_matches() {
@@ -421,6 +426,65 @@ mod tests {
         let mut output = Vec::new();
         super::apply_update_inner(&mut output, &update, &mut state).unwrap();
         assert!(output.windows(5).any(|window| window == b"\x1b[2 q"));
+    }
+
+    #[test]
+    fn cursor_style_is_reasserted_when_cursor_is_hidden() {
+        let update = ScreenUpdate {
+            cols: 80,
+            rows: 24,
+            cursor_pos: None,
+            cursor_visible: false,
+            cursor_shape: CursorShape::Block,
+            cells: Vec::new(),
+            full_redraw: false,
+            gfx: Vec::new(),
+            reset: false,
+        };
+        let mut output = Vec::new();
+        super::apply_update_inner(&mut output, &update, &mut ApplyState::default()).unwrap();
+        assert!(output.windows(5).any(|window| window == b"\x1b[2 q"));
+    }
+
+    #[test]
+    fn underline_color_is_sent_to_the_host_terminal() {
+        let update = ScreenUpdate {
+            cols: 80,
+            rows: 24,
+            cursor_pos: None,
+            cursor_visible: false,
+            cursor_shape: CursorShape::Block,
+            cells: vec![crate::proto::CellDiff {
+                x: 0,
+                y: 0,
+                symbol: "x".to_string(),
+                fg: ProtoColor::Rgb(0, 0, 42),
+                bg: ProtoColor::Default,
+                underline_color: ProtoColor::Rgb(17, 34, 51),
+                bold: false,
+                dim: false,
+                italic: false,
+                underline: false,
+                reverse: false,
+                strike: false,
+            }],
+            full_redraw: false,
+            gfx: Vec::new(),
+            reset: false,
+        };
+        let mut output = Vec::new();
+        super::apply_update_inner(&mut output, &update, &mut ApplyState::default()).unwrap();
+        assert!(
+            output
+                .windows(b"\x1b[58;2;17;34;51m".len())
+                .any(|window| window == b"\x1b[58;2;17;34;51m"),
+            "{output:?}"
+        );
+        assert!(
+            output
+                .windows(b"\x1b[38;2;0;0;42m".len())
+                .any(|window| window == b"\x1b[38;2;0;0;42m")
+        );
     }
 
     #[test]
