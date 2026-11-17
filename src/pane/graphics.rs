@@ -823,21 +823,12 @@ pub fn kitty_chunked_apc(control: &KittyControlData, payload: &[u8]) -> Vec<u8> 
     while offset < encoded.len() {
         let end = (offset + 4096).min(encoded.len());
         let last = end == encoded.len();
-        let mut chunk_ctl = KittyControlData {
-            q: Some(2),
-            ..Default::default()
+        let mut chunk_ctl = if first {
+            control.clone()
+        } else {
+            KittyControlData::default()
         };
-        if first {
-            chunk_ctl.a = control.a.clone();
-            chunk_ctl.f = control.f;
-            chunk_ctl.s = control.s;
-            chunk_ctl.v = control.v;
-            chunk_ctl.i = control.i;
-            chunk_ctl.p = control.p;
-            chunk_ctl.c = control.c;
-            chunk_ctl.r = control.r;
-            chunk_ctl.t = control.t.clone();
-        }
+        chunk_ctl.q = Some(2);
         chunk_ctl.m = Some(if last { 0 } else { 1 });
         out.extend_from_slice(b"\x1b_G");
         out.extend_from_slice(chunk_ctl.to_string().as_bytes());

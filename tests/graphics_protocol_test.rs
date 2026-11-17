@@ -119,6 +119,21 @@ fn kitty_single_chunk_with_explicit_final_marker_is_emitted() {
 }
 
 #[test]
+fn kitty_rechunking_preserves_compression_metadata() {
+    let mut parser = GraphicsParser::new();
+    let mut sequence = b"\x1b_Ga=T,f=32,o=z,s=1,v=1,i=13;".to_vec();
+    sequence.extend(std::iter::repeat_n(b'A', 5000));
+    sequence.extend_from_slice(b"\x1b\\");
+    let segments = parser.split(&sequence);
+    let Segment::Graphic(command) = &segments[0] else {
+        panic!("transmission should produce a graphics command");
+    };
+
+    let emitted = command.emission_payload();
+    assert!(emitted.windows(3).any(|window| window == b"o=z"));
+}
+
+#[test]
 fn chunked_kitty_payload_is_bounded_and_parser_recovers() {
     let mut parser = GraphicsParser::new();
     let first = [

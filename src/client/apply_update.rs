@@ -127,8 +127,8 @@ pub fn apply_update(
     }
 }
 
-fn apply_update_inner(
-    out: &mut Stdout,
+fn apply_update_inner<W: Write>(
+    out: &mut W,
     update: &ScreenUpdate,
     state: &mut ApplyState,
 ) -> std::io::Result<()> {
@@ -396,8 +396,31 @@ pub fn wrap_tmux_passthrough(seq: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{kitty_image_ids, safe_cell_symbol, safe_terminal_title};
+    use super::{ApplyState, kitty_image_ids, safe_cell_symbol, safe_terminal_title};
     use crate::client::terminal::KittyImageId;
+    use crate::proto::{CursorShape, ScreenUpdate};
+
+    #[test]
+    fn cursor_style_is_reasserted_even_when_cached_value_matches() {
+        let mut state = ApplyState {
+            cursor_shape: Some(CursorShape::Block),
+            ..ApplyState::default()
+        };
+        let update = ScreenUpdate {
+            cols: 80,
+            rows: 24,
+            cursor_pos: Some((3, 4)),
+            cursor_visible: true,
+            cursor_shape: CursorShape::Block,
+            cells: Vec::new(),
+            full_redraw: false,
+            gfx: Vec::new(),
+            reset: false,
+        };
+        let mut output = Vec::new();
+        super::apply_update_inner(&mut output, &update, &mut state).unwrap();
+        assert!(output.windows(5).any(|window| window == b"\x1b[2 q"));
+    }
 
     #[test]
     fn kitty_image_ids_are_extracted_from_placement_and_transmit_commands() {
