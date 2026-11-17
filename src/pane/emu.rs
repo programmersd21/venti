@@ -587,6 +587,19 @@ impl Pane {
                                                 &mut p, pixel_size, pos.0, pos.1,
                                             );
                                         }
+                                        // tell the host terminal not to move
+                                        // its cursor after the image: venti
+                                        // already advanced its own vt100
+                                        // cursor. without this the host's
+                                        // cursor lands somewhere unexpected
+                                        // and the next frame's text is
+                                        // misplaced.
+                                        if let Some(metadata) = cmd.kitty_metadata.as_mut() {
+                                            metadata.C = Some(1);
+                                            if let Some(data) = crate::pane::graphics::rewrite_kitty_control(&cmd.data, metadata) {
+                                                cmd.data = data;
+                                            }
+                                        }
                                     }
                                     if let Ok(mut store) = graphics_reader.lock() {
                                         store.push(*cmd);

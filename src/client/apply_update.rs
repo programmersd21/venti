@@ -268,6 +268,10 @@ fn apply_update_inner<W: Write>(
             }
             out.queue(MoveTo(g.col, g.row))?;
             out.write_all(&bytes)?;
+            // the host terminal's cursor moved with the image; track it so
+            // the next cell write repositions correctly instead of leaving
+            // text wherever the image left the cursor.
+            state.cursor_pos = Some((g.col, g.row));
         }
     }
 

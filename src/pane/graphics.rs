@@ -593,6 +593,7 @@ impl GraphicCommand {
             v: metadata.v,
             c: metadata.c,
             r: metadata.r,
+            C: Some(1),
             ..Default::default()
         };
         if control.i.is_none() {
@@ -622,6 +623,7 @@ impl GraphicCommand {
             t: Some("d".to_string()),
             c: metadata.c,
             r: metadata.r,
+            C: Some(1),
             ..Default::default()
         };
         if control.i.is_none() {
@@ -734,7 +736,9 @@ impl GraphicCommand {
         place_ctl.z = metadata.z;
         place_ctl.X = metadata.X;
         place_ctl.Y = metadata.Y;
-        place_ctl.C = metadata.C;
+        // venti positions the host cursor itself; tell the host not to move
+    // it after the placement so text after the image stays where it belongs.
+    place_ctl.C = Some(1);
 
         let mut out = kitty_apc(&del_ctl);
         out.extend_from_slice(&kitty_apc(&place_ctl));
@@ -1520,7 +1524,7 @@ fn kitty_chunk_continuation(control: &str) -> Option<u8> {
     marker
 }
 
-fn rewrite_kitty_control(data: &[u8], control: &KittyControlData) -> Option<Vec<u8>> {
+pub fn rewrite_kitty_control(data: &[u8], control: &KittyControlData) -> Option<Vec<u8>> {
     let delimiter = data.iter().position(|byte| *byte == b';')?;
     let payload_end = if data.ends_with(b"\x1b\\") {
         data.len().checked_sub(2)?
@@ -1589,7 +1593,9 @@ fn reemit_placement(metadata: &KittyControlData) -> Option<Vec<u8>> {
     place_ctl.z = metadata.z;
     place_ctl.X = metadata.X;
     place_ctl.Y = metadata.Y;
-    place_ctl.C = metadata.C;
+    // venti positions the host cursor itself; tell the host not to move
+    // it after the placement so text after the image stays where it belongs.
+    place_ctl.C = Some(1);
 
     // combine delete and place into a single sequence
     let mut out = kitty_apc(&del_ctl);
@@ -2129,6 +2135,7 @@ impl PaneGraphicsStore {
                     p: metadata.p,
                     c: metadata.c,
                     r: metadata.r,
+                    C: Some(1),
                     q: Some(2),
                     t: Some("d".to_string()),
                     ..Default::default()
