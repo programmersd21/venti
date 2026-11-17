@@ -166,7 +166,7 @@ pub struct ServerCore {
     /// monotonic seq for queued delete commands (keeps them past the client's
     /// seq filter even when connected with other pending graphics).
     gfx_delete_seq: u64,
-    gfx_anchors: HashMap<PaneId, (usize, usize)>,
+    gfx_anchors: HashMap<(PaneId, bool), i64>,
     last_sizes: HashMap<PaneId, (u16, u16)>,
     clock_text: String,
     last_clock_check: Instant,
@@ -494,34 +494,33 @@ impl ServerCore {
             let Some(pane) = self.session.panes.get(&id) else {
                 continue;
             };
-            let cur_base = pane
+            let (alternate_screen, scroll_count) = pane
                 .parser
                 .lock()
-                .map(|mut p| crate::pane::search::scrollback_len(&mut p))
-                .unwrap_or(0);
-            let cur_off = pane.scroll_offset;
-            let prev = self
-                .gfx_anchors
-                .get(&id)
-                .copied()
-                .unwrap_or((cur_base, cur_off));
-            // anchors track the vt100 grid; scroll offset is applied at
-            // paint time (row + scroll_offset), so only content growth moves
-            // them here. shifting for scroll-back double-counted the offset
-            // and the image was never visible again afterwards.
-            let grew = cur_base.saturating_sub(prev.0) as i32;
-            let shift = grew;
+                .map(|parser| {
+                    let screen = parser.screen();
+                    (screen.alternate_screen(), screen.full_screen_scrolls())
+                })
+                .unwrap_or((false, 0));
+            let anchor_key = (id, alternate_screen);
+            // The parser reports cumulative grid scrolling even after its
+            // bounded scrollback stops growing. Track each screen separately
+            // so alt-screen activity cannot move main-screen placements.
+            let shift = graphics_scroll_delta(&mut self.gfx_anchors, anchor_key, scroll_count);
             if shift != 0
                 && let Ok(mut store) = pane.graphics.lock()
             {
-                let before = store.active_commands().len();
-                store.scroll_rows(shift);
+                store.scroll_screen_rows(shift, alternate_screen);
                 // a placement anchored further above the grid than the
                 // retained scrollback is gone for good: free it and tell the
                 // host to drop the pixels (zellij frees the image once its
                 // last placement leaves the history).
-                let limit = -(self.config.general.scrollback as i32);
-                let freed = store.drop_scrolled_out(limit);
+                let limit = if alternate_screen {
+                    0
+                } else {
+                    -(self.config.general.scrollback as i32)
+                };
+                let freed = store.drop_screen_scrolled_out(limit, Some(alternate_screen));
                 for command in freed {
                     let Some(metadata) = command.kitty_metadata.as_ref() else {
                         continue;
@@ -555,14 +554,13 @@ impl ServerCore {
                         client.hidden_gfx.remove(&(id, command.seq));
                     }
                 }
-                if before > 0 || !store.active_commands().is_empty() {
+                if !store.active_commands().is_empty() {
                     moved = true;
                 }
             }
-            self.gfx_anchors.insert(id, (cur_base, cur_off));
         }
         self.gfx_anchors
-            .retain(|id, _| self.session.panes.contains_key(id));
+            .retain(|(id, _), _| self.session.panes.contains_key(id));
         moved
     }
 
@@ -4096,11 +4094,19 @@ impl ServerCore {
                         // or when a scroll reflow shifted anchors (reemit_gfx).
 
                         let fresh = if let Some((crop_data, _, _)) = &crop {
-                            // image is clipped by the viewport; cropping takes
-                            // precedence over ordinary re-placement.
+                            // A cropped placement references image pixels by id.
+                            // Upload them first for a new client, then replace
+                            // the initial oversized placement with the clipped
+                            // geometry in the same ordered update.
                             client.emitted_gfx.insert(key);
                             client.hidden_gfx.remove(&key);
-                            Some(crop_data.clone())
+                            if was_emitted {
+                                Some(crop_data.clone())
+                            } else {
+                                let mut data = cmd.emission_payload();
+                                data.extend_from_slice(crop_data);
+                                Some(data)
+                            }
                         } else if was_emitted {
                             let was_hidden = client.hidden_gfx.remove(&key);
                             // on force_full: always re-emit if was hidden (modal->normal, workspace switch)
@@ -4126,11 +4132,13 @@ impl ServerCore {
                                 } else {
                                     Some(cmd.emission_payload())
                                 }
-                            } else if was_hidden
-                                || reemit_gfx
-                                || is_animating
-                                || false
-                            {
+                            } else if graphics_need_reposition(
+                                cmd.format,
+                                was_hidden,
+                                reemit_gfx,
+                                is_animating,
+                                reposition_kitty,
+                            ) {
                                 cmd.reemit.clone().or_else(|| Some(cmd.emission_payload()))
                             } else {
                                 None
@@ -4702,6 +4710,30 @@ fn contains(rect: &Rect, col: u16, row: u16) -> bool {
         && u32::from(row) < u32::from(rect.y) + u32::from(rect.height)
 }
 
+fn graphics_need_reposition(
+    format: crate::pane::GraphicFormat,
+    was_hidden: bool,
+    anchors_moved: bool,
+    animating: bool,
+    kitty_viewport_moved: bool,
+) -> bool {
+    was_hidden
+        || anchors_moved
+        || animating
+        || (kitty_viewport_moved && format == crate::pane::GraphicFormat::Kitty)
+}
+
+fn graphics_scroll_delta(
+    anchors: &mut HashMap<(PaneId, bool), i64>,
+    key: (PaneId, bool),
+    current: i64,
+) -> i32 {
+    let previous = anchors.entry(key).or_insert(current);
+    let delta = current.saturating_sub(*previous);
+    *previous = current;
+    delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
 fn resize_floating_rect(
     content: Rect,
     origin: Rect,
@@ -4777,12 +4809,44 @@ fn inner_rect(rect: Rect, border: bool) -> Rect {
 
 #[cfg(test)]
 mod floating_resize_tests {
-    use super::{CoreEvent, FloatingCorner, ServerCore, resize_floating_rect};
+    use super::{
+        CoreEvent, FloatingCorner, ServerCore, graphics_need_reposition, graphics_scroll_delta,
+        resize_floating_rect,
+    };
     use crate::layout::{PaneId, SplitAxis};
     use ratatui::layout::Rect;
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn viewport_scroll_repositions_kitty_without_repainting_sixel() {
+        assert!(graphics_need_reposition(
+            crate::pane::GraphicFormat::Kitty,
+            false,
+            false,
+            false,
+            true,
+        ));
+        assert!(!graphics_need_reposition(
+            crate::pane::GraphicFormat::Sixel,
+            false,
+            false,
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn graphics_scroll_anchors_survive_alternate_screen_roundtrips() {
+        let pane = PaneId(41);
+        let mut anchors = std::collections::HashMap::new();
+        assert_eq!(graphics_scroll_delta(&mut anchors, (pane, false), 12), 0);
+        assert_eq!(graphics_scroll_delta(&mut anchors, (pane, true), 0), 0);
+        assert_eq!(graphics_scroll_delta(&mut anchors, (pane, false), 12), 0);
+        assert_eq!(graphics_scroll_delta(&mut anchors, (pane, true), 5), 5);
+        assert_eq!(graphics_scroll_delta(&mut anchors, (pane, false), 13), 1);
+    }
 
     #[test]
     fn floating_resize_stays_inside_tiny_content_for_every_corner() {

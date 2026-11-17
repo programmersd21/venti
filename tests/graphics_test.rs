@@ -265,6 +265,73 @@ fn kitty_transmit_produces_cheap_delete_and_place_reemit_bytes() {
 }
 
 #[test]
+fn kitty_retransmit_deletes_reused_image_id_before_uploading_new_pixels() {
+    let mut parser = GraphicsParser::new();
+    let mut store = PaneGraphicsStore::new();
+    let first = parser
+        .feed(b"\x1b_Ga=T,f=24,i=71,s=1,v=1;AAAA\x1b\\", 2, 3)
+        .remove(0);
+    store.push(first);
+    let daemon_id = store.active_commands()[0]
+        .kitty_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.i)
+        .expect("kitty transmit has a daemon image id");
+
+    let replacement = parser
+        .feed(b"\x1b_Ga=T,f=24,i=71,s=1,v=1;BBBB\x1b\\", 4, 5)
+        .remove(0);
+    store.push(replacement);
+
+    let commands = store.active_commands();
+    assert_eq!(
+        commands.len(),
+        1,
+        "replacement replaces the old stored image"
+    );
+    let emitted = commands[0].emission_payload();
+    let delete = venti::pane::graphics::kitty_apc(&venti::pane::graphics::KittyControlData {
+        a: Some("d".to_string()),
+        d: Some("I".to_string()),
+        i: Some(daemon_id),
+        q: Some(2),
+        ..Default::default()
+    });
+    assert!(
+        emitted.starts_with(&delete),
+        "retransmitting image {daemon_id} must delete its old placements before upload"
+    );
+    assert!(emitted.windows(4).any(|window| window == b"BBBB"));
+}
+
+#[test]
+fn scrolling_one_screen_preserves_the_other_screens_graphic_anchors() {
+    let mut parser = GraphicsParser::new();
+    let main = parser
+        .feed(b"\x1b_Ga=T,f=24,i=72,s=1,v=1;AAAA\x1b\\", 0, 0)
+        .remove(0);
+    let mut alternate = parser
+        .feed(b"\x1b_Ga=T,f=24,i=73,s=1,v=1;BBBB\x1b\\", 4, 0)
+        .remove(0);
+    alternate.alternate_screen = true;
+    let mut store = PaneGraphicsStore::new();
+    store.push(main);
+    store.push(alternate);
+
+    store.scroll_screen_rows(3, true);
+    let commands = store.active_commands();
+    assert_eq!(commands[0].row, 0);
+    assert_eq!(commands[1].row, 1);
+
+    store.scroll_screen_rows(2, true);
+    let freed = store.drop_screen_scrolled_out(0, Some(true));
+    assert_eq!(freed.len(), 1);
+    assert!(freed[0].alternate_screen);
+    assert_eq!(store.active_commands().len(), 1);
+    assert!(!store.active_commands()[0].alternate_screen);
+}
+
+#[test]
 fn kitty_separate_transmit_and_placement_both_survive_for_replay() {
     let mut parser = GraphicsParser::new();
     let mut store = PaneGraphicsStore::new();
@@ -828,7 +895,7 @@ fn transmissions_that_read_pixels_from_a_file_are_not_re_transmitted() {
 }
 
 #[test]
-fn placements_in_the_scrollback_do_not_drift_when_the_grid_scrolls() {
+fn placements_in_scrollback_continue_tracking_content_on_later_scrolls() {
     use venti::pane::graphics::{
         GraphicCommand, GraphicFormat, KittyControlData, PaneGraphicsStore,
     };
@@ -855,11 +922,15 @@ fn placements_in_the_scrollback_do_not_drift_when_the_grid_scrolls() {
     push(5, 1); // in the live grid
     push(-5, 2); // already in the scrollback
 
-    // the grid scrolls by 3 lines: the live placement moves up, the one in
-    // the scrollback stays where it is (new output is appended below it).
+    // every live-grid scroll moves the placement anchor relative to the live
+    // viewport, including after that anchor has entered the scrollback.
     store.scroll_rows(3);
     let rows: Vec<i32> = store.active_commands().iter().map(|c| c.row).collect();
-    assert_eq!(rows, vec![2, -5]);
+    assert_eq!(rows, vec![2, -8]);
+
+    store.scroll_rows(4);
+    let rows: Vec<i32> = store.active_commands().iter().map(|c| c.row).collect();
+    assert_eq!(rows, vec![-2, -12]);
 }
 
 #[test]
@@ -898,7 +969,7 @@ fn placements_follow_their_content_when_the_grid_is_re_wrapped() {
 }
 
 #[test]
-fn placements_in_the_grid_move_up_when_rows_scroll_into_the_scrollback() {
+fn placements_keep_tracking_their_text_after_entering_scrollback() {
     use venti::pane::graphics::{
         GraphicCommand, GraphicFormat, KittyControlData, PaneGraphicsStore,
     };
@@ -922,13 +993,14 @@ fn placements_in_the_grid_move_up_when_rows_scroll_into_the_scrollback() {
             file_bytes: None,
         });
     }
-    // the pane lost two rows: the grid content scrolled up by two
+    // scrolling live content moves both visible and historical anchors in
+    // live-grid-relative coordinates.
     store.scroll_rows(2);
     let rows: Vec<i32> = store.active_commands().iter().map(|c| c.row).collect();
     assert_eq!(
         rows,
-        vec![3, -3],
-        "the grid placement moves up, the scrollback placement stays"
+        vec![3, -5],
+        "both anchors move with the rows above the live viewport"
     );
 }
 
@@ -1041,8 +1113,10 @@ fn large_kitty_payload_is_chunked_on_emission() {
             .map(|e| p + 3 + e)
             .unwrap_or(rest.len());
         let apc = &rest[p..end];
-        let semi = apc.iter().position(|&b| b == b';').unwrap_or(apc.len());
-        let payload_len = apc.len() - semi - 1;
+        let payload_len = apc
+            .iter()
+            .position(|&b| b == b';')
+            .map_or(0, |semi| apc.len().saturating_sub(semi + 1));
         assert!(
             payload_len <= 4096,
             "a chunk carried {payload_len} bytes, limit is 4096"
@@ -1084,10 +1158,12 @@ fn small_kitty_payload_is_not_chunked() {
         pixel_size: None,
         file_bytes: None,
     };
-    // a small payload is forwarded verbatim, not chunked
+    // The delete prelude and the small upload each stay as one APC.
     let out = cmd.emission_payload();
     let apc_count = out.windows(3).filter(|w| *w == b"\x1b_G").count();
-    assert_eq!(apc_count, 1, "a small payload must stay a single apc");
+    assert_eq!(apc_count, 2, "a small upload must stay a single apc");
+    assert!(!out.windows(3).any(|window| window == b"m=1"));
+    assert!(String::from_utf8_lossy(&out).contains("a=T"));
 }
 
 #[test]

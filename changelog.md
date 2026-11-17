@@ -30,6 +30,7 @@ first stable release. linux only.
 - right-click tab opens menu, elsewhere no-op
 - per-client graphics delivery, fresh session-wide seq per emission
 - osc 10/11/12 color queries answered (chafa no longer blocks)
+- kitten icat was blank: venti only read t=f/t=s files, not t=t temporary files (which is what icat uses). now all three media types are cached and rebuilt inline
 
 ### removed
 

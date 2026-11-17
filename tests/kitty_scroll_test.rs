@@ -279,6 +279,10 @@ fn kitty_image_tracks_content_when_terminal_scrolls() {
         .collect();
     assert!(
         moved_rows.iter().any(|row| *row != last_visible_row),
-        "changing the scrollback viewport left the visible kitty placement at row {last_visible_row}; emitted rows: {moved_rows:?}"
+        "changing the scrollback viewport left the visible kitty placement at row {last_visible_row}; emitted rows: {moved_rows:?}; full frames: {:?}",
+        frames
+            .iter()
+            .map(|frame| frame.full_redraw)
+            .collect::<Vec<_>>()
     );
 }

@@ -767,6 +767,23 @@ mod tests {
     }
 
     #[test]
+    fn parser_counts_full_screen_scrolls_past_the_scrollback_limit_per_screen() {
+        let mut parser = vt100::Parser::new(4, 20, 2);
+        parser.process(b"\x1b[4S\x1b[4S\x1b[4S");
+        assert_eq!(parser.screen().full_screen_scrolls(), 12);
+        assert_eq!(crate::pane::search::scrollback_len(&mut parser), 2);
+
+        parser.process(b"\x1b[?1049h\x1b[3S");
+        assert!(parser.screen().alternate_screen());
+        assert_eq!(parser.screen().full_screen_scrolls(), 3);
+        parser.process(b"\x1b[?1049l");
+        assert_eq!(parser.screen().full_screen_scrolls(), 12);
+
+        parser.process(b"\x1b[2;4r\x1b[3S");
+        assert_eq!(parser.screen().full_screen_scrolls(), 12);
+    }
+
+    #[test]
     fn reflow_keeps_long_lines_when_the_pane_shrinks() {
         let mut parser = vt100::Parser::new(10, 40, 1000);
         parser.process(b"LONGLINE-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\r\n");

@@ -336,6 +336,22 @@ fn kitty_placement_fits_the_remaining_pane_bounds() {
 }
 
 #[test]
+fn kitty_unicode_placeholder_size_is_owned_by_its_placeholder_cells() {
+    let mut parser = GraphicsParser::new();
+    let mut segments = parser.split(b"\x1b_Ga=T,f=100,i=71,U=1,c=12,r=8;AAAA\x1b\\");
+    let Segment::Graphic(command) = &mut segments[0] else {
+        panic!("expected kitty graphic");
+    };
+    let original_data = command.data.clone();
+
+    command.fit_kitty_to_bounds(4, 3);
+
+    let metadata = command.kitty_metadata.as_ref().unwrap();
+    assert_eq!((metadata.c, metadata.r), (Some(12), Some(8)));
+    assert_eq!(command.data, original_data);
+}
+
+#[test]
 fn kitty_native_size_image_is_not_upscaled_to_fill_its_pane() {
     let mut parser = GraphicsParser::new();
     let mut segments = parser.split(b"\x1b_Ga=T,f=100,i=8;AAAA\x1b\\");

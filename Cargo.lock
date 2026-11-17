@@ -2227,8 +2227,6 @@ dependencies = [
 [[package]]
 name = "term-wm-vt100"
 version = "0.16.2-patch7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "762b2c3aad638a9227dc22442dbf0670d7eb88a932fb55d5fbd35c9eb639793e"
 dependencies = [
  "itoa",
  "unicode-width",

@@ -212,10 +212,7 @@ fn unicode_placeholder_enabled_graphics_work_in_scrollback() {
     store.scroll_rows(5);
     assert_eq!(store.active_commands()[0].row, -3);
 
-    // Once the placement is in the scrollback it keeps its distance to the
-    // live grid: the grid scrolls forward only, so nothing moves it back.
-    // scrolling the viewport back down is applied at paint time
-    // (row + scroll_offset), not by moving the anchor.
+    // A downward grid scroll moves the content and its anchor down together.
     store.scroll_rows(-5);
-    assert_eq!(store.active_commands()[0].row, -3);
+    assert_eq!(store.active_commands()[0].row, 2);
 }

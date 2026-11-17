@@ -96,6 +96,7 @@ impl<'a> Widget for PaneView<'a> {
                 let contents = c.contents();
                 let vt_fg = c.fgcolor();
                 let vt_bg = c.bgcolor();
+                let vt_underline_color = c.underline_color();
                 let bold = c.bold();
                 let italic = c.italic();
                 let underline = c.underline();
@@ -109,9 +110,13 @@ impl<'a> Widget for PaneView<'a> {
                     map_vt_color(vt_fg, self.theme)
                 };
                 let mut bg_color = map_vt_color(vt_bg, self.theme);
+                let mut underline_color = map_vt_color(vt_underline_color, self.theme);
 
                 if reverse && !is_kitty_placeholder {
                     std::mem::swap(&mut fg_color, &mut bg_color);
+                }
+                if is_kitty_placeholder {
+                    underline_color = map_vt_color_raw(vt_underline_color);
                 }
 
                 // selection highlight
@@ -168,7 +173,8 @@ impl<'a> Widget for PaneView<'a> {
 
                 let mut style = Style::default()
                     .fg(fg_color)
-                    .bg(bg_color);
+                    .bg(bg_color)
+                    .underline_color(underline_color);
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -343,7 +349,8 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
-
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
+        assert_eq!(buffer[(1, 0)].underline_color, Color::Reset);
     }
 
     #[test]
@@ -365,7 +372,7 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 1, 1), &mut buffer);
-
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(42));
     }
 
     #[test]
@@ -387,7 +394,7 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
-
+        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
     }
 
     #[test]

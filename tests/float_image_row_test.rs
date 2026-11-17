@@ -242,7 +242,12 @@ fn a_floated_pane_keeps_the_image_on_the_text_row() {
         .collect();
     assert!(
         !revealed.is_empty(),
-        "the image must be re-placed when it is scrolled back into view"
+        "the image must be re-placed when it is scrolled back into view; frame graphics: {:?}",
+        frames[before_scroll..]
+            .iter()
+            .flat_map(|frame| frame.gfx.iter())
+            .map(|(row, col, data)| (*row, *col, String::from_utf8_lossy(data).into_owned()))
+            .collect::<Vec<_>>()
     );
 
     // every placement must sit inside the pane: an image drawn over the

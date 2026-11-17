@@ -483,7 +483,7 @@ impl GraphicCommand {
     /// the host silently drops oversized single apcs. everything else is
     /// forwarded verbatim.
     pub fn emission_payload(&self) -> Vec<u8> {
-        if self.format == GraphicFormat::Kitty
+        let mut payload = if self.format == GraphicFormat::Kitty
             && let Some(metadata) = self.kitty_metadata.as_ref()
             && let Some((_, payload)) = self.kitty_control_and_payload()
             && kitty_needs_chunking(payload.map_or(0, <[u8]>::len))
@@ -491,9 +491,31 @@ impl GraphicCommand {
         {
             let mut control = metadata.clone();
             control.m = None;
-            return kitty_chunked_apc(&control, payload);
+            kitty_chunked_apc(&control, payload)
+        } else {
+            self.data.clone()
+        };
+        if let Some(delete) = self.kitty_delete_before_transmit() {
+            payload.splice(0..0, delete);
         }
-        self.data.clone()
+        payload
+    }
+
+    fn kitty_delete_before_transmit(&self) -> Option<Vec<u8>> {
+        let metadata = self.kitty_metadata.as_ref()?;
+        if self.format != GraphicFormat::Kitty
+            || !matches!(metadata.a.as_deref(), Some("t") | Some("T"))
+        {
+            return None;
+        }
+        let image_id = metadata.i?;
+        Some(kitty_apc(&KittyControlData {
+            a: Some("d".to_string()),
+            d: Some("I".to_string()),
+            i: Some(image_id),
+            q: Some(2),
+            ..Default::default()
+        }))
     }
 
     /// true when the command transmits image data through a file (t=f) or
@@ -507,7 +529,7 @@ impl GraphicCommand {
                 .kitty_metadata
                 .as_ref()
                 .and_then(|metadata| metadata.t.as_deref())
-                .is_some_and(|medium| matches!(medium, "f" | "s"))
+                .is_some_and(|medium| matches!(medium, "f" | "s" | "t"))
     }
 
     /// reads the pixel data of a file-backed kitty transmission (`t=f` for a
@@ -520,7 +542,7 @@ impl GraphicCommand {
     pub fn read_transmitted_file(&mut self) -> Option<Vec<u8>> {
         let metadata = self.kitty_metadata.as_ref()?;
         let medium = metadata.t.as_deref()?;
-        if !matches!(medium, "f" | "s") {
+        if !matches!(medium, "f" | "s" | "t") {
             return None;
         }
         if !matches!(metadata.a.as_deref(), Some("t") | Some("T")) {
@@ -540,6 +562,12 @@ impl GraphicCommand {
         } else {
             std::fs::read(&path).ok()?
         };
+        // for temporary files (t=t), delete the file after reading, like
+        // kitty does. the app created it and expects the terminal to clean
+        // it up.
+        if medium == "t" {
+            let _ = std::fs::remove_file(&path);
+        }
         if bytes.len() > MAX_TRANSMITTED_FILE_BYTES {
             return None;
         }
@@ -593,7 +621,11 @@ impl GraphicCommand {
         if control.i.is_none() {
             control.i = Some(next_image_id());
         }
-        Some(kitty_chunked_apc(&control, bytes))
+        let mut payload = kitty_chunked_apc(&control, bytes);
+        if let Some(delete) = self.kitty_delete_before_transmit() {
+            payload.splice(0..0, delete);
+        }
+        Some(payload)
     }
 
     pub fn crop_placement(
@@ -716,6 +748,9 @@ impl GraphicCommand {
         let Some(metadata) = self.kitty_metadata.as_mut() else {
             return;
         };
+        if metadata.U == Some(1) {
+            return;
+        }
         if matches!(metadata.a.as_deref(), Some("d" | "q" | "t")) {
             return;
         }
@@ -1371,6 +1406,8 @@ impl GraphicsParser {
         // file (or unlinks the shared memory) the moment it sends the
         // command, so every microsecond between the parse and the read is a
         // chance to lose the pixels for good. kitten icat does exactly this.
+        // this is the earliest possible point: split() is called in the
+        // reader thread, so we read before any other processing.
         command.read_transmitted_file();
         segments.push(Segment::Graphic(Box::new(command)));
     }
@@ -2242,9 +2279,19 @@ impl PaneGraphicsStore {
     /// placement scrolls away). returns the removed commands so the caller
     /// can delete them on the host.
     pub fn drop_scrolled_out(&mut self, limit: i32) -> Vec<GraphicCommand> {
+        self.drop_screen_scrolled_out(limit, None)
+    }
+
+    pub fn drop_screen_scrolled_out(
+        &mut self,
+        limit: i32,
+        alternate_screen: Option<bool>,
+    ) -> Vec<GraphicCommand> {
         let mut removed = Vec::new();
         self.commands.retain(|command| {
-            if command.row < limit {
+            if command.row < limit
+                && alternate_screen.is_none_or(|alternate| command.alternate_screen == alternate)
+            {
                 removed.push(command.clone());
                 false
             } else {
@@ -2372,23 +2419,24 @@ impl PaneGraphicsStore {
         removed
     }
 
-    /// shifts graphic row coordinates when scrollback content is added or user scrolls.
+    /// shifts graphic row coordinates when the live grid scrolls.
     ///
     /// graphics are preserved even when they move out of bounds, because they're referenced by
     /// the host terminal and may be re-placed when scrolling brings them back into view.
     /// only when explicitly deleted by the application should they be removed.
     /// shifts every stored graphic's anchor by `rows` (positive scrolls
-    /// content up). anchors may go negative; they come back into view when
-    /// the content scrolls back down.
+    /// content up). anchors may go negative; they keep moving with the same
+    /// historical content as later lines scroll above them.
     pub fn scroll_rows(&mut self, rows: i32) {
         for cmd in &mut self.commands {
-            // only placements that live in the live grid move when the grid
-            // scrolls. A placement that already scrolled into the scrollback
-            // keeps its position: new output is appended below it, so shifting
-            // it made images drift away from their text (the "logo moves way
-            // up while the text stays put" symptom).
-            if cmd.row >= 0 {
-                cmd.row -= rows;
+            cmd.row = cmd.row.saturating_sub(rows);
+        }
+    }
+
+    pub fn scroll_screen_rows(&mut self, rows: i32, alternate_screen: bool) {
+        for cmd in &mut self.commands {
+            if cmd.alternate_screen == alternate_screen {
+                cmd.row = cmd.row.saturating_sub(rows);
             }
         }
     }
