@@ -8,9 +8,9 @@
   <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=f9e2af&color=f9e2af&labelColor=313244" alt="license" /></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=fab387&labelColor=313244" alt="rust" /></a>
   <a href="https://github.com/programmersd21/venti/issues"><img src="https://img.shields.io/github/issues/programmersd21/venti?style=for-the-badge&logo=github&logoColor=f38ba8&color=f38ba8&labelColor=313244" alt="issues" /></a>
-  <a href="https://github.com/programmersd21/venti/stargazers"><img src="https://img.shields.io/github/stars/programmersd21/venti?style=for-the-badge&logo=github&logoColor=f9e2af&color=f9e2af&labelColor=313244" alt="stars" /></a>
-  <a href="https://github.com/programmersd21/venti/commits/main"><img src="https://img.shields.io/github/last-commit/programmersd21/venti?style=for-the-badge&logo=git&logoColor=a6e3a1&color=a6e3a1&labelColor=313244" alt="last commit" /></a>
-  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/github/repo-size/programmersd21/venti?style=for-the-badge&logo=github&logoColor=89b4fa&color=89b4fa&labelColor=313244" alt="repo size" /></a>
+  <a href="https://github.com/programmersd21/venti/stargazers"><img src="https://img.shields.io/github/stars/programmersd21/venti?style=for-the-badge&logo=github&logoColor=f5c2e7&color=f5c2e7&labelColor=313244" alt="stars" /></a>
+  <a href="https://github.com/programmersd21/venti/commits/main"><img src="https://img.shields.io/github/last-commit/programmersd21/venti?style=for-the-badge&logo=git&logoColor=94e2d5&color=94e2d5&labelColor=313244" alt="last commit" /></a>
+  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/github/repo-size/programmersd21/venti?style=for-the-badge&logo=github&logoColor=89dceb&color=89dceb&labelColor=313244" alt="repo size" /></a>
 </p>
 
 > [!NOTE]\
