@@ -275,10 +275,11 @@ fn apply_update_inner<W: Write>(
             CursorShape::Underline => SetCursorStyle::SteadyUnderScore,
             CursorShape::Bar => SetCursorStyle::SteadyBar,
         };
-        if state.cursor_shape != Some(update.cursor_shape) {
-            out.queue(style)?;
-            state.cursor_shape = Some(update.cursor_shape);
-        }
+        // Child applications and terminal shell integrations can change the
+        // host cursor without changing this client's cache. Reassert the
+        // active shape each frame so a stale cache cannot leave a beam cursor.
+        out.queue(style)?;
+        state.cursor_shape = Some(update.cursor_shape);
         if state.cursor_visible != Some(true) {
             out.queue(Show)?;
             state.cursor_visible = Some(true);
