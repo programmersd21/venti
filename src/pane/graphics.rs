@@ -1220,43 +1220,32 @@ impl GraphicsParser {
     /// sequences with m=0 finalize the chunked transmission.
     fn handle_kitty_sequence(&mut self, segments: &mut Vec<Segment>) {
         let data = std::mem::take(&mut self.seq);
-
-        // parse control data (between _G and first ;)
-        let ctl = match kitty_control_data(&data) {
-            Some(c) => c,
-            None => {
-                tracing::debug!("invalid kitty control data");
-                return;
-            }
+        let Some(ctl) = kitty_control_data(&data) else {
+            tracing::debug!("invalid kitty control data");
+            self.kitty_chunk = None;
+            return;
         };
-
         let control = KittyControlData::parse(ctl);
-        // a=q is a *question*, not an image: the host must never see it and
-        // the pane must always get an immediate answer, even when the outer
-        // terminal has no kitty support at all. route every a=q (with or
-        // without payload) through the plain pipeline so the local vt100 +
-        // answer icat's probe, otherwise icat hangs forever
-        // waiting for the OK that the host (or this multiplexer) owes it.
         if control.a.as_deref() == Some("q") {
             self.plain.extend_from_slice(&data);
             return;
         }
+
+        let continuation = kitty_chunk_continuation(ctl);
         if self.kitty_chunk_dropping {
-            if control.m.is_some() {
-                if control.m == Some(0) {
+            if let Some(marker) = continuation {
+                if marker == 0 {
                     self.kitty_chunk_dropping = false;
                 }
                 return;
             }
             self.kitty_chunk_dropping = false;
         }
-        let is_more_chunks = control.m == Some(1);
+
         let payload_start = data
             .iter()
-            .position(|&b| b == b';')
-            .map(|p| p + 1)
-            .unwrap_or(data.len());
-
+            .position(|byte| *byte == b';')
+            .map_or(data.len(), |p| p + 1);
         let payload_end = if data.ends_with(b"\x1b\\") {
             data.len() - 2
         } else if data.ends_with(&[0x9c]) || data.ends_with(b"\x07") {
@@ -1264,74 +1253,66 @@ impl GraphicsParser {
         } else {
             data.len()
         };
+        let payload = data
+            .get(payload_start..payload_end)
+            .unwrap_or_default()
+            .to_vec();
 
-        let payload = if payload_end > payload_start {
-            data[payload_start..payload_end].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        if is_more_chunks {
-            // this is m=1: accumulate payload, keep collecting
-            if self.kitty_chunk.is_none() {
-                self.kitty_chunk = Some(KittyChunkBuffer {
-                    control,
-                    payload: Vec::new(),
-                });
-            }
-
-            if let Some(ref mut chunk) = self.kitty_chunk {
-                let Some(total_len) = chunk.payload.len().checked_add(payload.len()) else {
-                    self.kitty_chunk = None;
-                    self.kitty_chunk_dropping = true;
-                    tracing::warn!("kitty graphics transmission exceeded payload limit; dropping");
-                    return;
-                };
-                if total_len > MAX_KITTY_CHUNKED_PAYLOAD {
-                    self.kitty_chunk = None;
-                    self.kitty_chunk_dropping = true;
-                    tracing::warn!("kitty graphics transmission exceeded payload limit; dropping");
-                    return;
-                }
-                // verify that only m and q keys are in subsequent chunks (protocol spec)
-                // (We're lenient and just accumulate for now)
-                chunk.payload.extend_from_slice(&payload);
-            }
-        } else if let Some(mut chunk) = self.kitty_chunk.take() {
-            // this is m=0: finalize the chunked transmission
+        if let Some(marker) = continuation {
+            let Some(mut chunk) = self.kitty_chunk.take() else {
+                return;
+            };
             let Some(total_len) = chunk.payload.len().checked_add(payload.len()) else {
+                self.kitty_chunk_dropping = marker == 1;
                 tracing::warn!("kitty graphics transmission exceeded payload limit; dropping");
                 return;
             };
             if total_len > MAX_KITTY_CHUNKED_PAYLOAD {
+                self.kitty_chunk_dropping = marker == 1;
                 tracing::warn!("kitty graphics transmission exceeded payload limit; dropping");
                 return;
             }
             chunk.payload.extend_from_slice(&payload);
-
-            // merge control data: first chunk had format/dimensions, final chunk may have placement info.
-            // the merged sequence is a single complete transmission; a stray m key would tell the
-            // host to expect more chunks that will never arrive, and nothing is ever displayed
-            let mut merged_control = chunk.control;
-            merged_control.m = None;
-            // preserve any new keys from the final chunk (like placement keys)
-            if control.p.is_some() {
-                merged_control.p = control.p;
+            if marker == 1 {
+                self.kitty_chunk = Some(chunk);
+                return;
             }
-            if control.c.is_some() {
-                merged_control.c = control.c;
-            }
-            if control.r.is_some() {
-                merged_control.r = control.r;
-            }
-
+            chunk.control.m = None;
             self.flush_plain(segments);
-            self.emit_kitty_graphic(segments, merged_control, chunk.payload);
-        } else {
-            // single-chunk transmission (normal case)
-            self.flush_plain(segments);
-            self.emit_kitty_graphic(segments, control, payload);
+            self.emit_kitty_graphic(segments, chunk.control, chunk.payload);
+            return;
         }
+
+        // A complete command inside a transfer invalidates the unfinished
+        // image. Process the new command on its own instead of treating its
+        // bytes as the image's final chunk.
+        self.kitty_chunk = None;
+        if let Some(marker) = control.m {
+            if !matches!(control.a.as_deref(), None | Some("t") | Some("T")) {
+                return;
+            }
+            if marker == 0 {
+                let has_transmission = control.f.is_some() || control.t.is_some();
+                if !has_transmission {
+                    return;
+                }
+                let mut control = control;
+                control.m = None;
+                self.flush_plain(segments);
+                self.emit_kitty_graphic(segments, control, payload);
+                return;
+            }
+            if payload.len() > MAX_KITTY_CHUNKED_PAYLOAD {
+                self.kitty_chunk_dropping = true;
+                tracing::warn!("kitty graphics transmission exceeded payload limit; dropping");
+                return;
+            }
+            self.kitty_chunk = Some(KittyChunkBuffer { control, payload });
+            return;
+        }
+
+        self.flush_plain(segments);
+        self.emit_kitty_graphic(segments, control, payload);
     }
 
     /// emit a complete Kitty graphics command (after chunking is resolved)
@@ -1475,6 +1456,29 @@ fn kitty_control_data(seq: &[u8]) -> Option<&str> {
         .position(|&b| b == b';' || b == 0x07 || b == 0x1b || b == 0x9c)
         .unwrap_or(body.len());
     std::str::from_utf8(&body[..ctl_end]).ok()
+}
+
+fn kitty_chunk_continuation(control: &str) -> Option<u8> {
+    let mut marker = None;
+    for field in control.split(',') {
+        let (key, value) = field.split_once('=')?;
+        match key {
+            "m" if marker.is_none() => {
+                let value = value.parse::<u8>().ok()?;
+                if value > 1 {
+                    return None;
+                }
+                marker = Some(value);
+            }
+            "q" => {
+                if value.parse::<u8>().ok().is_none_or(|quiet| quiet > 2) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    marker
 }
 
 fn rewrite_kitty_control(data: &[u8], control: &KittyControlData) -> Option<Vec<u8>> {

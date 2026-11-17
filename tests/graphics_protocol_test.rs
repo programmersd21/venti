@@ -60,6 +60,65 @@ fn test_chunked_accumulation() {
 }
 
 #[test]
+fn interleaved_kitty_command_aborts_incomplete_transfer() {
+    let mut parser = GraphicsParser::new();
+    assert!(
+        parser
+            .split(b"\x1b_Ga=T,f=32,s=2,v=2,i=9,m=1;QUJD\x1b\\")
+            .is_empty()
+    );
+
+    let delete = parser.split(b"\x1b_Ga=d,d=i,i=9,q=2\x1b\\");
+    assert_eq!(delete.len(), 1, "the delete must not become image payload");
+    let Segment::Graphic(command) = &delete[0] else {
+        panic!("interleaved delete should remain a graphics command");
+    };
+    assert_eq!(
+        command.kitty_metadata.as_ref().unwrap().a.as_deref(),
+        Some("d")
+    );
+
+    assert!(
+        parser.split(b"\x1b_Gm=0;RE1BSU5ERVI=\x1b\\").is_empty(),
+        "an orphaned final chunk must not be emitted as an image"
+    );
+}
+
+#[test]
+fn kitty_feature_query_does_not_abort_chunked_transfer() {
+    let mut parser = GraphicsParser::new();
+    assert!(
+        parser
+            .split(b"\x1b_Gf=32,s=2,v=2,i=10,m=1;QUJD\x1b\\")
+            .is_empty()
+    );
+    let query = parser.split(b"\x1b_Ga=q,i=11,e=T\x1b\\");
+    assert!(
+        query
+            .iter()
+            .any(|segment| matches!(segment, Segment::Plain(_)))
+    );
+
+    let final_chunk = parser.split(b"\x1b_Gm=0;RA==\x1b\\");
+    assert_eq!(final_chunk.len(), 1);
+    let Segment::Graphic(command) = &final_chunk[0] else {
+        panic!("completed transfer must be emitted as a graphic");
+    };
+    assert_eq!(command.kitty_metadata.as_ref().unwrap().i, Some(10));
+}
+
+#[test]
+fn kitty_single_chunk_with_explicit_final_marker_is_emitted() {
+    let mut parser = GraphicsParser::new();
+    let segments = parser.split(b"\x1b_Ga=T,f=32,s=2,v=2,i=12,m=0;QUJDRA==\x1b\\");
+    assert_eq!(segments.len(), 1);
+    let Segment::Graphic(command) = &segments[0] else {
+        panic!("single-chunk transfer must be emitted");
+    };
+    assert_eq!(command.kitty_metadata.as_ref().unwrap().m, None);
+}
+
+#[test]
 fn chunked_kitty_payload_is_bounded_and_parser_recovers() {
     let mut parser = GraphicsParser::new();
     let first = [

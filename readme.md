@@ -140,13 +140,17 @@ docs: `docs/configuration.md`
 
 ## design
 
-- **linux only**: leverages vt100 terminal emulation (POSIX)
+- **linux only**: vt100 terminal emulation via term-wm-vt100 (patched)
 - **fast**: event-driven, minimal allocations, diff-based rendering
 - **minimal deps**: ratatui, crossterm, serde, nix syscalls
 - **no ui framework overhead**: custom rendering for perfect pixel control
 - **bright & readable**: catppuccin mocha + 14 other dark themes
 - **four profiles**: beginner, hypr, vim, dev, composable commands, fast fingers
 - **alt-first keybindings**: escape-prefixed combos work in most terminals (see docs)
+
+see `docs/architecture-assessment.md` for known limitations and planned
+improvements (terminal emulator migration, per-pane cursor shape, graphics
+ownership redesign).
 
 ## commands
 
