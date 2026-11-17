@@ -1,6 +1,43 @@
 # changelog
 
-## [0.1.0] - 2026-11-17
+## [0.2.0] - unreleased
+
+### added
+
+- architecture assessment document
+- osc 10/11/12 color query responder (chafa no longer blocks)
+- csi 14/16/18t pixel-size answers for kitten icat
+- kitty chunking at 4096 bytes (m=1/m=0)
+- file-backed kitty transmissions cached and rebuilt inline
+- help overlay scroll indicator as proportional thumb
+- all-command parse regression test
+- catppuccin-themed badges with logos in readme
+- github labels, discussions, topics, funding.yml
+- `alt+b` workspace bar toggle (later removed per user request)
+
+### changed
+
+- graphics off by default (experimental)
+- readme: honest protocol maturity matrix (kitty most tested, sixel weaker, iterm2 untested)
+- docs: lowercase, no em dashes, consistent with codebase
+
+### fixed
+
+- kitty payload leak into text stream
+- `:` command line accepts spaces in arguments
+- right-click tab opens menu, elsewhere no-op
+- per-client graphics delivery, fresh session-wide seq per emission
+- settings-menu apply failures report error instead of "updated"
+- failed frame draw drops client instead of pinning session
+- floating resize tests: mirror session-wide sets from per-client sets
+- `:` command line shows real parse error instead of generic "unknown command"
+
+### removed
+
+- dead `ClearScanner`, `dbg_*` tests, unused `insta` dependency
+- `alt+b` / `ToggleWorkspaceBar` (user request: only `shift+tab`)
+
+## [0.1.0] - 2026-11-16
 
 first stable release. linux only.
 
