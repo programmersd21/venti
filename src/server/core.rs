@@ -4129,8 +4129,7 @@ impl ServerCore {
                             } else if was_hidden
                                 || reemit_gfx
                                 || is_animating
-                                || (reposition_kitty
-                                    && cmd.format == crate::pane::GraphicFormat::Kitty)
+                                || false
                             {
                                 cmd.reemit.clone().or_else(|| Some(cmd.emission_payload()))
                             } else {

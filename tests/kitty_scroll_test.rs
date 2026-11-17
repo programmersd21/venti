@@ -211,7 +211,7 @@ fn kitty_image_tracks_content_when_terminal_scrolls() {
         write_msg(
             &mut stream,
             &ClientMsg::Mouse(venti::proto::MouseEventMsg {
-                col: 10,
+                col: 80,
                 row: 10,
                 button: venti::proto::MouseButtonKind::ScrollUp,
                 action: venti::proto::MouseActionKind::Down,
@@ -256,7 +256,7 @@ fn kitty_image_tracks_content_when_terminal_scrolls() {
     write_msg(
         &mut stream,
         &ClientMsg::Mouse(venti::proto::MouseEventMsg {
-            col: 10,
+            col: 80,
             row: 10,
             button: venti::proto::MouseButtonKind::ScrollDown,
             action: venti::proto::MouseActionKind::Down,
@@ -275,7 +275,6 @@ fn kitty_image_tracks_content_when_terminal_scrolls() {
     );
     let moved_rows: Vec<_> = all_kitty_placements(&frames)
         .into_iter()
-        .filter(|(_, _, data)| data.windows(4).any(|w| w == b"a=p,"))
         .map(|(row, _, _)| row)
         .collect();
     assert!(

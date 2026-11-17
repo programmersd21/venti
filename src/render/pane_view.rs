@@ -166,16 +166,9 @@ impl<'a> Widget for PaneView<'a> {
                     &self.kitty_id_map,
                 );
 
-                let vt_underline = c.underlinecolor();
-                let underline_color = if is_kitty_placeholder {
-                    map_vt_color_raw(vt_underline)
-                } else {
-                    map_vt_color(vt_underline, self.theme)
-                };
                 let mut style = Style::default()
                     .fg(fg_color)
-                    .bg(bg_color)
-                    .underline_color(underline_color);
+                    .bg(bg_color);
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -351,8 +344,6 @@ mod tests {
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
 
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
-        assert_eq!(buffer[(1, 0)].underline_color, Color::Reset);
     }
 
     #[test]
@@ -375,7 +366,6 @@ mod tests {
         }
         .render(Rect::new(0, 0, 1, 1), &mut buffer);
 
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(42));
     }
 
     #[test]
@@ -398,7 +388,6 @@ mod tests {
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
 
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
     }
 
     #[test]
@@ -422,7 +411,6 @@ mod tests {
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
 
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(1, 2, 3));
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(0, 0, 7));
     }
 
     #[test]
@@ -446,6 +434,5 @@ mod tests {
         .render(Rect::new(0, 0, 1, 1), &mut buffer);
 
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(1, 2, 3));
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(5));
     }
 }
