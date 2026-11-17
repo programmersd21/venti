@@ -3,12 +3,12 @@
   <br>
   fast, quiet terminal multiplexer for linux.
   <br><br>
-  <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&label=build&color=a6e3a1&labelColor=1e1e2e" alt="build" /></a>
-  <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&color=cba6f7&labelColor=1e1e2e" alt="crates.io" /></a>
-  <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&color=f9e2af&labelColor=1e1e2e" alt="license" /></a>
-  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/badge/platform-linux-89b4fa?style=for-the-badge&labelColor=1e1e2e" alt="platform" /></a>
-  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&labelColor=1e1e2e" alt="rust" /></a>
-  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/badge/terminal-multiplexer-94e2d5?style=for-the-badge&labelColor=1e1e2e" alt="terminal multiplexer" /></a>
+  <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&logo=githubactions&logoColor=a6e3a1&label=build&color=a6e3a1&labelColor=1e1e2e" alt="build" /></a>
+  <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&logo=rust&logoColor=cba6f7&color=cba6f7&labelColor=1e1e2e" alt="crates.io" /></a>
+  <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=f9e2af&color=f9e2af&labelColor=1e1e2e" alt="license" /></a>
+  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/badge/platform-linux-89b4fa?style=for-the-badge&logo=linux&logoColor=89b4fa&labelColor=1e1e2e" alt="platform" /></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=fab387&labelColor=1e1e2e" alt="rust" /></a>
+  <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/badge/terminal-multiplexer-94e2d5?style=for-the-badge&logo=gnometerminal&logoColor=94e2d5&labelColor=1e1e2e" alt="terminal multiplexer" /></a>
 </p>
 
 > [!NOTE]\
