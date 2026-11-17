@@ -81,7 +81,7 @@ fn test_query_responder_reports_actual_cursor_and_size() {
 
 #[test]
 fn test_kitty_query_only_answers_explicit_queries() {
-    let mut responder = QueryResponder::new();
+    let mut responder = QueryResponder::with_graphics_support(false, true);
     let mut out = Vec::new();
 
     // a=t (transmit) must not be answered
