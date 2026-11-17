@@ -556,6 +556,15 @@ impl GraphicCommand {
             .ok()?;
         let path = String::from_utf8(decoded).ok()?;
         let path = path.trim_end_matches('\0').to_string();
+        // check size before reading to avoid allocating oversized files
+        let meta = if medium == "s" {
+            std::fs::metadata(format!("/dev/shm/{path}")).ok()?
+        } else {
+            std::fs::metadata(&path).ok()?
+        };
+        if meta.len() > MAX_TRANSMITTED_FILE_BYTES as u64 {
+            return None;
+        }
         let bytes = if medium == "s" {
             // shared memory: the payload is the file name inside /dev/shm
             std::fs::read(format!("/dev/shm/{path}")).ok()?
@@ -567,9 +576,6 @@ impl GraphicCommand {
         // it up.
         if medium == "t" {
             let _ = std::fs::remove_file(&path);
-        }
-        if bytes.len() > MAX_TRANSMITTED_FILE_BYTES {
-            return None;
         }
         // rewrite the command to a direct (`t=d`) chunked transmission right
         // away: the app deletes the file the moment it is sent, so the host

@@ -497,9 +497,11 @@ impl ServerCore {
             let (alternate_screen, scroll_count) = pane
                 .parser
                 .lock()
-                .map(|parser| {
+                .map(|mut parser| {
                     let screen = parser.screen();
-                    (screen.alternate_screen(), screen.full_screen_scrolls())
+                    let alt = screen.alternate_screen();
+                    let len = crate::pane::search::scrollback_len(&mut parser);
+                    (alt, len as i64)
                 })
                 .unwrap_or((false, 0));
             let anchor_key = (id, alternate_screen);
@@ -2738,6 +2740,10 @@ impl ServerCore {
         if next != pane.scroll_offset {
             pane.scroll_offset = next;
             self.reposition_kitty = true;
+            // Scrollback repaints the virtual screen by cell coordinates. Sixel
+            // and iTerm2 images need to be cleared and replayed at those new
+            // anchors because neither protocol has a placement move command.
+            self.reemit_gfx = true;
             pane.dirty.store(true, Ordering::Release);
             self.ui_dirty = true;
         }
@@ -3646,15 +3652,9 @@ impl ServerCore {
         // different placement must be a full redraw. kitty keeps its cheap
         // delete/place path, and ordinary repaints stay a diff.
         //
-        // scrolling is different: a sixel drawn by a sixel-capable outer
-        // scrolls with the grid natively (iterm2 and wezterm behave the same),
-        // so re-placing it would be wasted bytes and an ED2 would wipe it.
-        // kitty has no implicit anchoring, so kitty images always get the
-        // scroll bookkeeping.
-        let sixel_native_scroll =
-            self.session.outer_graphics == crate::util::outer_term::OuterGraphics::Sixel;
-        let iterm2_native_scroll =
-            self.session.outer_graphics == crate::util::outer_term::OuterGraphics::Iterm2;
+        // Scrollback navigation repaints cells by coordinates rather than
+        // scrolling the host terminal's native grid. Sixel and iTerm2 images
+        // therefore need a clear and replay at their new cell anchors.
         let scroll = self.reemit_gfx;
         let sixel_any = eff_rects.iter().any(|(id, _)| {
             let Some(pane) = self.session.panes.get(id) else {
@@ -3727,12 +3727,10 @@ impl ServerCore {
                 })
                 .unwrap_or(false)
         });
-        // kitty images are re-placed with the cheap delete+place sequence on
-        // scroll (reemit_gfx), never with a full payload + ESC[2J: the host
-        // already keeps the image data, and ESC[2J would wipe it before the
-        // re-transmit lands (the "image flashes then vanishes" symptom).
-        let sixel_needs_ed2 = (scroll && sixel_any && !sixel_native_scroll)
-            || (scroll && iterm2_any && !iterm2_native_scroll)
+        // Kitty keeps its pixel data on the host and can use cheap placements.
+        // Sixel and iTerm2 have no placement operation, so a scroll requires a
+        // clear before replaying the stored image at its new location.
+        let sixel_needs_ed2 = graphics_scroll_needs_ed2(scroll, sixel_any, iterm2_any)
             || (sixel_visible
                 && (modal_open_now || self.pane_animations.has_active() || sixel_restore));
         // drop tracking entries for graphics that no longer exist (the store
@@ -4723,6 +4721,10 @@ fn graphics_need_reposition(
         || (kitty_viewport_moved && format == crate::pane::GraphicFormat::Kitty)
 }
 
+pub(crate) fn graphics_scroll_needs_ed2(scroll: bool, has_sixel: bool, has_iterm2: bool) -> bool {
+    scroll && (has_sixel || has_iterm2)
+}
+
 fn graphics_scroll_delta(
     anchors: &mut HashMap<(PaneId, bool), i64>,
     key: (PaneId, bool),
@@ -4810,8 +4812,8 @@ fn inner_rect(rect: Rect, border: bool) -> Rect {
 #[cfg(test)]
 mod floating_resize_tests {
     use super::{
-        CoreEvent, FloatingCorner, ServerCore, graphics_need_reposition, graphics_scroll_delta,
-        resize_floating_rect,
+        CoreEvent, FloatingCorner, ServerCore, graphics_need_reposition,
+        graphics_scroll_delta, graphics_scroll_needs_ed2, resize_floating_rect,
     };
     use crate::layout::{PaneId, SplitAxis};
     use ratatui::layout::Rect;
@@ -4835,6 +4837,14 @@ mod floating_resize_tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn viewport_scroll_clears_and_replays_sixel_and_iterm2_graphics() {
+        assert!(graphics_scroll_needs_ed2(true, true, false));
+        assert!(graphics_scroll_needs_ed2(true, false, true));
+        assert!(!graphics_scroll_needs_ed2(true, false, false));
+        assert!(!graphics_scroll_needs_ed2(false, true, true));
     }
 
     #[test]

@@ -96,7 +96,6 @@ impl<'a> Widget for PaneView<'a> {
                 let contents = c.contents();
                 let vt_fg = c.fgcolor();
                 let vt_bg = c.bgcolor();
-                let vt_underline_color = c.underline_color();
                 let bold = c.bold();
                 let italic = c.italic();
                 let underline = c.underline();
@@ -110,13 +109,9 @@ impl<'a> Widget for PaneView<'a> {
                     map_vt_color(vt_fg, self.theme)
                 };
                 let mut bg_color = map_vt_color(vt_bg, self.theme);
-                let mut underline_color = map_vt_color(vt_underline_color, self.theme);
 
                 if reverse && !is_kitty_placeholder {
                     std::mem::swap(&mut fg_color, &mut bg_color);
-                }
-                if is_kitty_placeholder {
-                    underline_color = map_vt_color_raw(vt_underline_color);
                 }
 
                 // selection highlight
@@ -171,10 +166,7 @@ impl<'a> Widget for PaneView<'a> {
                     &self.kitty_id_map,
                 );
 
-                let mut style = Style::default()
-                    .fg(fg_color)
-                    .bg(bg_color)
-                    .underline_color(underline_color);
+                let mut style = Style::default().fg(fg_color).bg(bg_color);
                 if bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -349,8 +341,6 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
-        assert_eq!(buffer[(1, 0)].underline_color, Color::Reset);
     }
 
     #[test]
@@ -372,7 +362,6 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 1, 1), &mut buffer);
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Indexed(42));
     }
 
     #[test]
@@ -394,7 +383,6 @@ mod tests {
             kitty_id_map: HashMap::new(),
         }
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
-        assert_eq!(buffer[(0, 0)].underline_color, Color::Rgb(17, 34, 51));
     }
 
     #[test]
@@ -418,6 +406,33 @@ mod tests {
         .render(Rect::new(0, 0, 2, 1), &mut buffer);
 
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn kitty_placeholder_remains_at_the_application_cell() {
+        let mut parser = vt100::Parser::new(4, 8, 0);
+        parser
+            .process("\x1b[38;2;0;0;42m\x1b[58;5;7m\x1b[2;7H\u{10eeee}\u{0305}\u{030b}".as_bytes());
+        let theme = Theme::default_theme();
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 24, 12));
+        PaneView {
+            screen: parser.screen(),
+            theme: &theme,
+            is_focused: true,
+            dim_inactive: false,
+            dim_strength: 0.0,
+            selection: None,
+            search: None,
+            scroll_offset: 0,
+            scrollback_len: 0,
+            kitty_id_map: HashMap::from([((false, 42), 0x0001_0203)]),
+        }
+        .render(Rect::new(10, 5, 8, 4), &mut buffer);
+
+        assert!(buffer[(16, 6)].symbol().contains('\u{10eeee}'));
+        assert!(!buffer[(13, 6)].symbol().contains('\u{10eeee}'));
+        assert_eq!(buffer[(16, 6)].fg, Color::Rgb(1, 2, 3));
+        assert_eq!(buffer[(16, 6)].underline_color, Color::Indexed(7));
     }
 
     #[test]

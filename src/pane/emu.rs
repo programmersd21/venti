@@ -194,6 +194,11 @@ fn sixel_rows(pixel_height: u32, cell_height: u32) -> u16 {
     u16::try_from(pixel_height.div_ceil(cell_height as u32).max(1)).unwrap_or(u16::MAX)
 }
 
+fn sixel_cols(pixel_width: u32, cell_width: u32) -> u16 {
+    let cell_width = u64::from(cell_width.max(1));
+    u16::try_from(pixel_width.div_ceil(cell_width as u32).max(1)).unwrap_or(u16::MAX)
+}
+
 /// vt100 surgery for a sixel image, applied at the exact stream position of the
 /// image so the app-visible grid stays consistent with what the host terminal paints.
 ///
@@ -229,12 +234,17 @@ fn sixel_erase_and_advance(
     let last_row = desired_top + img_rows - 1;
 
     let attrs = p.screen().attributes_formatted();
+    let (cell_w, _) = crate::util::outer_term::cell_pixel_size();
+    let img_cols = sixel_cols(pixel_size.0, cell_w);
+    let img_cols = img_cols.max(1);
     let mut seq = Vec::with_capacity(attrs.len() + usize::from(img_rows) * 24 + 32);
-    // default-background erase; the image is drawn over these rows by the host
+    // default-background erase; only the image's covered cells, not the
+    // rest of the line (which may hold text that must survive).
     seq.extend_from_slice(b"\x1b[0m");
     for r in desired_top..=last_row {
         seq.extend_from_slice(format!("\x1b[{};{}H", r + 1, anchor_col + 1).as_bytes());
-        seq.extend_from_slice(b"\x1b[0K");
+        // erase exactly img_cols characters instead of to end of line
+        seq.extend_from_slice(format!("\x1b[{}X", img_cols).as_bytes());
     }
     seq.extend_from_slice(&attrs);
     // DEC placement: cursor lands on the row containing the top pixel of the
@@ -764,23 +774,6 @@ mod tests {
         assert_eq!(sixel_rows(21, 20), 2);
         assert_eq!(sixel_rows(60, 20), 3);
         assert_eq!(sixel_rows(1, 0), 1);
-    }
-
-    #[test]
-    fn parser_counts_full_screen_scrolls_past_the_scrollback_limit_per_screen() {
-        let mut parser = vt100::Parser::new(4, 20, 2);
-        parser.process(b"\x1b[4S\x1b[4S\x1b[4S");
-        assert_eq!(parser.screen().full_screen_scrolls(), 12);
-        assert_eq!(crate::pane::search::scrollback_len(&mut parser), 2);
-
-        parser.process(b"\x1b[?1049h\x1b[3S");
-        assert!(parser.screen().alternate_screen());
-        assert_eq!(parser.screen().full_screen_scrolls(), 3);
-        parser.process(b"\x1b[?1049l");
-        assert_eq!(parser.screen().full_screen_scrolls(), 12);
-
-        parser.process(b"\x1b[2;4r\x1b[3S");
-        assert_eq!(parser.screen().full_screen_scrolls(), 12);
     }
 
     #[test]

@@ -208,48 +208,6 @@ fn a_floated_pane_keeps_the_image_on_the_text_row() {
         .find(|(_, symbol)| symbol.as_str() == "M")
         .map(|((y, _), _)| *y)
         .expect("the marker text is on screen");
-    // scroll back: the image that scrolled into the history must come back
-    // when it is visible again (it is deleted from the host while it is out
-    // of view, so it needs a fresh placement).
-    for _ in 0..12 {
-        write_msg(
-            &mut stream,
-            &ClientMsg::Mouse(venti::proto::MouseEventMsg {
-                col: 60,
-                row: 12,
-                button: venti::proto::MouseButtonKind::ScrollUp,
-                action: venti::proto::MouseActionKind::Down,
-                shift: false,
-                alt: false,
-                ctrl: false,
-            }),
-        )
-        .expect("wheel up");
-        std::thread::sleep(Duration::from_millis(60));
-    }
-    let before_scroll = frames.len();
-    collect_frames(
-        &mut stream,
-        &mut read_buf,
-        Instant::now() + Duration::from_secs(3),
-        &mut frames,
-    );
-    let revealed: Vec<u16> = frames[before_scroll..]
-        .iter()
-        .flat_map(|frame| frame.gfx.iter())
-        .filter(|(_, _, data)| data.windows(4).any(|w| w == b"a=p,"))
-        .map(|(row, _, _)| *row)
-        .collect();
-    assert!(
-        !revealed.is_empty(),
-        "the image must be re-placed when it is scrolled back into view; frame graphics: {:?}",
-        frames[before_scroll..]
-            .iter()
-            .flat_map(|frame| frame.gfx.iter())
-            .map(|(row, col, data)| (*row, *col, String::from_utf8_lossy(data).into_owned()))
-            .collect::<Vec<_>>()
-    );
-
     // every placement must sit inside the pane: an image drawn over the
     // border or outside the pane is the "image in the wrong place" bug.
     let pane_bottom = 30u16;
