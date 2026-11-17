@@ -45,7 +45,9 @@ pub fn from_code(code: u8) -> OuterGraphics {
 
 pub fn from_term_name(term: &str) -> Option<OuterGraphics> {
     let t = term.to_lowercase();
-    if t.contains("kitty") || t.contains("ghostty") || t.contains("wezterm")
+    if t.contains("kitty")
+        || t.contains("ghostty")
+        || t.contains("wezterm")
         || t.contains("konsole")
     {
         return Some(OuterGraphics::Kitty);

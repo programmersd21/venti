@@ -4812,8 +4812,8 @@ fn inner_rect(rect: Rect, border: bool) -> Rect {
 #[cfg(test)]
 mod floating_resize_tests {
     use super::{
-        CoreEvent, FloatingCorner, ServerCore, graphics_need_reposition,
-        graphics_scroll_delta, graphics_scroll_needs_ed2, resize_floating_rect,
+        CoreEvent, FloatingCorner, ServerCore, graphics_need_reposition, graphics_scroll_delta,
+        graphics_scroll_needs_ed2, resize_floating_rect,
     };
     use crate::layout::{PaneId, SplitAxis};
     use ratatui::layout::Rect;
