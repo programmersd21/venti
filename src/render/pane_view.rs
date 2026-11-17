@@ -96,7 +96,6 @@ impl<'a> Widget for PaneView<'a> {
                 let contents = c.contents();
                 let vt_fg = c.fgcolor();
                 let vt_bg = c.bgcolor();
-                let vt_underline = c.underlinecolor();
                 let bold = c.bold();
                 let italic = c.italic();
                 let underline = c.underline();
@@ -167,6 +166,7 @@ impl<'a> Widget for PaneView<'a> {
                     &self.kitty_id_map,
                 );
 
+                let vt_underline = c.underlinecolor();
                 let underline_color = if is_kitty_placeholder {
                     map_vt_color_raw(vt_underline)
                 } else {

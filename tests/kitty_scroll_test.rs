@@ -241,4 +241,45 @@ fn kitty_image_tracks_content_when_terminal_scrolls() {
         replaces >= 1,
         "the kitty image was never re-placed after scroll-back into view; placements seen: {placements:?}"
     );
+
+    // The previous assertion only proved recovery from fully hidden state.
+    // A placement that remains wholly inside the viewport still has to move
+    // when the scrollback viewport changes. In particular, this catches the
+    // case where a one-cell icat image stays at its old host-terminal row.
+    let last_visible_row = placements
+        .iter()
+        .rev()
+        .find(|(_, _, data)| data.windows(4).any(|w| w == b"a=p,"))
+        .map(|(row, _, _)| *row)
+        .expect("a visible kitty placement was emitted");
+    frames.clear();
+    write_msg(
+        &mut stream,
+        &ClientMsg::Mouse(venti::proto::MouseEventMsg {
+            col: 10,
+            row: 10,
+            button: venti::proto::MouseButtonKind::ScrollDown,
+            action: venti::proto::MouseActionKind::Down,
+            shift: false,
+            alt: false,
+            ctrl: false,
+        }),
+    )
+    .expect("wheel down");
+    collect_frames(
+        &mut stream,
+        &mut read_buf,
+        Instant::now() + Duration::from_secs(2),
+        &mut frames,
+        |_| false,
+    );
+    let moved_rows: Vec<_> = all_kitty_placements(&frames)
+        .into_iter()
+        .filter(|(_, _, data)| data.windows(4).any(|w| w == b"a=p,"))
+        .map(|(row, _, _)| row)
+        .collect();
+    assert!(
+        moved_rows.iter().any(|row| *row != last_visible_row),
+        "changing the scrollback viewport left the visible kitty placement at row {last_visible_row}; emitted rows: {moved_rows:?}"
+    );
 }

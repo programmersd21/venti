@@ -145,6 +145,10 @@ pub struct ServerCore {
     /// anchored graphics moved; request cheap re-placement from the client
     /// instead of a full redraw.
     reemit_gfx: bool,
+    /// the scrollback viewport moved while a Kitty placement stayed visible.
+    /// Kitty graphics are positioned in host-terminal coordinates, so they
+    /// need a cheap re-placement even when they never leave the pane bounds.
+    reposition_kitty: bool,
     /// set when a sixel/iterm2 image that was on screen got hidden (modal,
     /// scroll out of view, alternate screen swap); the next visible frame
     /// needs an ed-two repaint to wipe the stale pixels before re-placing
@@ -285,6 +289,7 @@ impl ServerCore {
             initial_pane_deferred: defer_initial_pane && restored == 0,
             force_full: true,
             reemit_gfx: false,
+            reposition_kitty: false,
             sixel_restore_pending: false,
             pane_app_running: HashMap::new(),
             emitted_gfx: HashSet::new(),
@@ -1581,6 +1586,7 @@ impl ServerCore {
             && pane.scroll_offset != target
         {
             pane.scroll_offset = target;
+            self.reposition_kitty = true;
             pane.dirty.store(true, Ordering::Release);
             self.ui_dirty = true;
         }
@@ -2733,6 +2739,7 @@ impl ServerCore {
         let next = (pane.scroll_offset as isize + delta).clamp(0, max as isize) as usize;
         if next != pane.scroll_offset {
             pane.scroll_offset = next;
+            self.reposition_kitty = true;
             pane.dirty.store(true, Ordering::Release);
             self.ui_dirty = true;
         }
@@ -3759,6 +3766,7 @@ impl ServerCore {
         }
         let force_full = std::mem::take(&mut self.force_full) || sixel_needs_ed2;
         let reemit_gfx = std::mem::take(&mut self.reemit_gfx) || force_full;
+        let reposition_kitty = std::mem::take(&mut self.reposition_kitty);
 
         // clear dirty flags before drawing so output arriving during the frame
         // schedules another render.
@@ -4118,7 +4126,12 @@ impl ServerCore {
                                 } else {
                                     Some(cmd.emission_payload())
                                 }
-                            } else if was_hidden || reemit_gfx || is_animating {
+                            } else if was_hidden
+                                || reemit_gfx
+                                || is_animating
+                                || (reposition_kitty
+                                    && cmd.format == crate::pane::GraphicFormat::Kitty)
+                            {
                                 cmd.reemit.clone().or_else(|| Some(cmd.emission_payload()))
                             } else {
                                 None

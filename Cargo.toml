@@ -8,6 +8,7 @@ repository = "https://github.com/programmersd21/venti"
 documentation = "https://github.com/programmersd21/venti/tree/main/docs"
 keywords = ["terminal", "multiplexer", "tmux", "tui", "linux"]
 categories = ["command-line-utilities"]
+exclude = ["assets/demo.mp4", "local/", "tests/", "benches/", "target/", "script.md", "todo.md"]
 
 [lib]
 name = "venti"
@@ -45,6 +46,8 @@ vt100 = { package = "term-wm-vt100", version = "0.16.2-patch6" }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.12.0"
+
+
 
 [patch.crates-io]
 term-wm-vt100 = { path = "vendor/term-wm-vt100" }
