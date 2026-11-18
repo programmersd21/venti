@@ -155,7 +155,6 @@ fn pane_view_paints_every_cell_in_its_area() {
         search: None,
         scroll_offset: 0,
         scrollback_len: 0,
-        kitty_id_map: Default::default(),
     };
     view.render(area, &mut buf);
 
@@ -192,7 +191,6 @@ fn pane_view_clips_wide_glyph_at_area_edge() {
         search: None,
         scroll_offset: 0,
         scrollback_len: 0,
-        kitty_id_map: Default::default(),
     }
     .render(area, &mut buffer);
 

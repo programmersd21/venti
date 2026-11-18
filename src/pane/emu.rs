@@ -114,7 +114,10 @@ fn remove_cursor_blink_sequences(bytes: &mut Vec<u8>, pending: &mut Vec<u8>) {
 /// mirrors kitty's default cursor advance for placements inside the virtual
 /// pane screen. kitty's outer cursor is reset from this screen after each
 /// frame, so failing to apply the same movement shifts following child output.
-fn advance_kitty_cursor(parser: &mut Parser, command: &crate::pane::graphics::GraphicCommand) {
+fn advance_kitty_cursor(
+    parser: &mut vt100::Parser,
+    command: &crate::pane::graphics::GraphicCommand,
+) {
     let Some(metadata) = command.kitty_metadata.as_ref() else {
         return;
     };
@@ -188,6 +191,74 @@ fn div_ceil(numerator: u64, denominator: u64) -> Option<u64> {
     Some(numerator.div_ceil(denominator))
 }
 
+/// feeds a plain segment to the vt100 parser while detecting screen clears.
+///
+/// returns a bitmask of the screens that were erased at the moment the child
+/// sent the erase: bit 0 = main screen, bit 1 = alternate screen. only ED2
+/// ("erase all") and ED3 ("erase saved lines") clear the graphics: ED0/ED1
+/// are partial erases. RIS (`ESC c`) clears both. the parser is fed up to and
+/// including each clear before the active screen is sampled, so a clear that
+/// follows an alternate-screen switch is attributed to the right grid.
+fn process_plain_tracking_clears(parser: &mut vt100::Parser, bytes: &[u8]) -> u8 {
+    let clear_bit = |parser: &vt100::Parser| {
+        if parser.screen().alternate_screen() {
+            2u8
+        } else {
+            1u8
+        }
+    };
+    let mut cleared = 0u8;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] != 0x1b {
+            i += 1;
+            continue;
+        }
+        match bytes[i + 1] {
+            b'[' => {
+                let mut j = i + 2;
+                while j < bytes.len() && (0x30..=0x3f).contains(&bytes[j]) {
+                    j += 1;
+                }
+                if j >= bytes.len() {
+                    break;
+                }
+                if bytes[j] == b'J' {
+                    let params = &bytes[i + 2..j];
+                    let mut value: u32 = 0;
+                    let mut valid = !params.is_empty();
+                    for &b in params {
+                        if b.is_ascii_digit() {
+                            value = value.saturating_mul(10).saturating_add(u32::from(b - b'0'));
+                        } else {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    // ED2 (ESC[2J) / ED3 (ESC[3J): explicit full display clear.
+                    if valid && (value == 2 || value == 3) {
+                        parser.process(&bytes[start..=j]);
+                        cleared |= clear_bit(parser);
+                        start = j + 1;
+                    }
+                }
+                i = j + 1;
+            }
+            b'c' => {
+                parser.process(&bytes[start..=i + 1]);
+                cleared |= 3;
+                start = i + 2;
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < bytes.len() {
+        parser.process(&bytes[start..]);
+    }
+    cleared
+}
 /// how many grid rows a sixel with `pixel_height` occupies, given the cell height in pixels.
 fn sixel_rows(pixel_height: u32, cell_height: u32) -> u16 {
     let cell_height = u64::from(cell_height.max(1));
@@ -243,8 +314,9 @@ fn sixel_erase_and_advance(
     seq.extend_from_slice(b"\x1b[0m");
     for r in desired_top..=last_row {
         seq.extend_from_slice(format!("\x1b[{};{}H", r + 1, anchor_col + 1).as_bytes());
-        // erase exactly img_cols characters instead of to end of line
+        // erase covered characters using spaces with default bg/fg
         seq.extend_from_slice(format!("\x1b[{}X", img_cols).as_bytes());
+        seq.extend(std::iter::repeat_n(b' ', usize::from(img_cols)));
     }
     seq.extend_from_slice(&attrs);
     // DEC placement: cursor lands on the row containing the top pixel of the
@@ -260,14 +332,15 @@ fn sixel_erase_and_advance(
     }
 }
 
-/// re-wraps the visible grid when the pane gets narrower.
+/// resizes the visible grid when the pane gets narrower and returns the
+/// old-row -> new-row mapping so graphics anchored in the grid follow their
+/// content.
 ///
-/// the vt100 grid truncates every row to the new width instead of reflowing
-/// it, so shrinking a pane (toggling a float, for example) cut the tail off
-/// every long line and the text was gone for good. zellij reflows its grid on
-/// a resize; this does the same for the visible rows: the text is captured
-/// before the resize and written back wrapped to the new width, with the
-/// cursor restored to where it was.
+/// the vt100 fork reflows the grid in `set_size`: soft-wrapped rows are
+/// re-wrapped instead of truncating the tail of long lines, and the cursor
+/// keeps its cell. re-feeding the captured text here would duplicate the
+/// reflow and, when the cursor sits on the bottom row (a shell prompt), scroll
+/// the whole pane into the scrollback and leave the visible grid blank.
 fn reflow_on_resize(p: &mut vt100::Parser, new_cols: u16) -> Vec<(u16, u16)> {
     let (rows, cols) = p.screen().size();
     if new_cols >= cols {
@@ -276,43 +349,18 @@ fn reflow_on_resize(p: &mut vt100::Parser, new_cols: u16) -> Vec<(u16, u16)> {
         return Vec::new();
     }
     let contents = p.screen().contents();
-    let cursor = p.screen().cursor_position();
-    p.screen_mut().set_size(rows, new_cols);
-
     let width = usize::from(new_cols).max(1);
-    let mut out = String::new();
-    // how many extra rows the re-wrap adds above the cursor
-    let mut extra_before_cursor = 0usize;
     // old row -> new row, so graphics anchored in the grid follow their content
     let mut row_map: Vec<(u16, u16)> = Vec::new();
     let mut new_row = 0usize;
     for (index, line) in contents.split('\n').enumerate() {
         if index > 0 {
-            out.push_str("\r\n");
             new_row += 1;
         }
-        let chunks = wrap_line(line, width);
-        if index < usize::from(cursor.0) {
-            extra_before_cursor += chunks.len().saturating_sub(1);
-        }
         row_map.push((index as u16, new_row.min(u16::MAX as usize) as u16));
-        for (chunk_index, chunk) in chunks.iter().enumerate() {
-            if chunk_index > 0 {
-                out.push_str("\r\n");
-                new_row += 1;
-            }
-            out.push_str(chunk);
-        }
+        new_row += wrap_line(line, width).len().saturating_sub(1);
     }
-    if out.is_empty() {
-        return Vec::new();
-    }
-    p.process(out.as_bytes());
-    // put the cursor back where it was (accounting for the extra wrapped rows)
-    let target_row = usize::from(cursor.0) + extra_before_cursor;
-    let target_col = usize::from(cursor.1).min(width.saturating_sub(1));
-    let restore = format!("\x1b[{};{}H", target_row + 1, target_col + 1);
-    p.process(restore.as_bytes());
+    p.screen_mut().set_size(rows, new_cols);
     row_map
 }
 
@@ -375,6 +423,11 @@ pub struct Pane {
     /// alternate_screen flips false). the core loop hard-drops the pane's
     /// kitty placements once, so dead TUI images do not linger on the host.
     pub alt_exited: Arc<AtomicBool>,
+    /// set by the pty reader when the child erases the screen (ED2/ED3 or
+    /// RIS). stored images for that screen are dropped and the core forces a
+    /// full repaint, otherwise a "clear" would resurrect the old sixel on
+    /// the next redraw.
+    pub screen_cleared: Arc<AtomicBool>,
     pub child_exited: Arc<AtomicBool>,
     pub exit_status: Arc<Mutex<Option<i32>>>,
     pub child_pid: Option<u32>,
@@ -503,8 +556,11 @@ impl Pane {
         let graphics = Arc::new(Mutex::new(PaneGraphicsStore::new()));
         let gfx_dirty = Arc::new(AtomicBool::new(false));
         let alt_exited = Arc::new(AtomicBool::new(false));
+        let screen_cleared = Arc::new(AtomicBool::new(false));
         let graphics_reader = Arc::clone(&graphics);
         let alt_exited_reader = Arc::clone(&alt_exited);
+        let screen_cleared_reader = Arc::clone(&screen_cleared);
+        let gfx_dirty_reader = Arc::clone(&gfx_dirty);
         let spawn_ctx_clone = spawn_ctx_owned;
         let reader_thread = std::thread::spawn(move || {
             let mut buf = [0u8; 65536];
@@ -556,8 +612,8 @@ impl Pane {
                                     {
                                         responder.process_queries(&plain, &mut **w, Some(screen));
                                     }
-                                    if let Ok(mut p) = parser_reader.lock() {
-                                        p.process(&plain);
+                                    let cleared = if let Ok(mut p) = parser_reader.lock() {
+                                        let cleared = process_plain_tracking_clears(&mut p, &plain);
                                         let now_alt = p.screen().alternate_screen();
                                         if was_alt_screen && !now_alt {
                                             alt_exited_reader.store(true, Ordering::Release);
@@ -566,6 +622,20 @@ impl Pane {
                                         let reporting = p.screen().mouse_protocol_mode()
                                             != vt100::MouseProtocolMode::None;
                                         mouse_reporting_reader.store(reporting, Ordering::Release);
+                                        cleared
+                                    } else {
+                                        0
+                                    };
+                                    if cleared != 0 {
+                                        if let Ok(mut store) = graphics_reader.lock() {
+                                            if cleared & 1 != 0 {
+                                                store.clear_screen_images(false);
+                                            }
+                                            if cleared & 2 != 0 {
+                                                store.clear_screen_images(true);
+                                            }
+                                        }
+                                        screen_cleared_reader.store(true, Ordering::Release);
                                     }
                                 }
                                 crate::pane::graphics::Segment::Graphic(mut cmd) => {
@@ -587,16 +657,13 @@ impl Pane {
                                                 &mut p, pixel_size, pos.0, pos.1,
                                             );
                                         }
-                                        // tell the host terminal not to move
-                                        // its cursor after the image: venti
-                                        // already advanced its own vt100
-                                        // cursor. without this the host's
-                                        // cursor lands somewhere unexpected
-                                        // and the next frame's text is
-                                        // misplaced.
                                         if let Some(metadata) = cmd.kitty_metadata.as_mut() {
                                             metadata.C = Some(1);
-                                            if let Some(data) = crate::pane::graphics::rewrite_kitty_control(&cmd.data, metadata) {
+                                            if let Some(data) =
+                                                crate::pane::graphics::rewrite_kitty_control(
+                                                    &cmd.data, metadata,
+                                                )
+                                            {
                                                 cmd.data = data;
                                             }
                                         }
@@ -604,6 +671,7 @@ impl Pane {
                                     if let Ok(mut store) = graphics_reader.lock() {
                                         store.push(*cmd);
                                     }
+                                    gfx_dirty_reader.store(true, Ordering::Release);
                                 }
                             }
                         }
@@ -666,6 +734,7 @@ impl Pane {
             search: None,
             mouse_reporting,
             alt_exited,
+            screen_cleared,
             child_exited,
             exit_status,
             child_pid,
@@ -773,11 +842,7 @@ impl Pane {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        advance_kitty_cursor, normalize_csi_f_to_h, reserve_input_bytes, sixel_erase_and_advance,
-        sixel_rows,
-    };
-    use crate::pane::graphics::{GraphicCommand, GraphicFormat, GraphicsParser};
+    use super::{normalize_csi_f_to_h, reserve_input_bytes, sixel_erase_and_advance, sixel_rows};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -809,7 +874,7 @@ mod tests {
     #[test]
     fn sixel_erase_and_advance_blanks_covered_rows() {
         let mut parser = vt100::Parser::new(10, 40, 0);
-        parser.process(b"[2;1Hjunkjunkjunk");
+        parser.process(b"\x1b[2;1Hjunk");
         sixel_erase_and_advance(&mut parser, (64, 20), 1, 0);
         let contents = parser.screen().contents();
         assert!(
@@ -821,7 +886,7 @@ mod tests {
     #[test]
     fn sixel_erase_and_advance_places_cursor_on_last_image_row() {
         let mut parser = vt100::Parser::new(10, 40, 0);
-        parser.process(b"[2;1H");
+        parser.process(b"\x1b[2;1H");
         sixel_erase_and_advance(&mut parser, (64, 60), 1, 0);
         // 60px at 20px cells = 3 rows; cursor lands on the last occupied row
         assert_eq!(parser.screen().cursor_position(), (3, 0));
@@ -886,89 +951,6 @@ mod tests {
         let mut bytes = b"\x1b[1;".to_vec();
         normalize_csi_f_to_h(&mut bytes);
         assert_eq!(bytes, b"\x1b[1;");
-    }
-
-    #[test]
-    fn kitty_placement_advances_virtual_cursor_by_its_cell_size() {
-        let mut graphics = GraphicsParser::new();
-        let command = graphics
-            .feed(b"\x1b_Ga=T,c=3,r=2;AAAA\x1b\\", 0, 0)
-            .remove(0);
-        let mut parser = vt100::Parser::new(24, 80, 100);
-        advance_kitty_cursor(&mut parser, &command);
-        assert_eq!(parser.screen().cursor_position(), (2, 3));
-    }
-
-    #[test]
-    fn kitty_width_only_png_placement_advances_using_its_aspect_ratio() {
-        use base64::Engine as _;
-
-        let mut png_header = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
-        png_header.extend_from_slice(&24u32.to_be_bytes());
-        png_header.extend_from_slice(&24u32.to_be_bytes());
-        let payload = base64::engine::general_purpose::STANDARD.encode(png_header);
-        let bytes = format!("\x1b_Ga=T,f=100,i=42,c=12;{payload}\x1b\\");
-        let mut graphics = GraphicsParser::new();
-        let command = graphics.feed(bytes.as_bytes(), 0, 0).remove(0);
-        let mut parser = vt100::Parser::new(24, 80, 100);
-
-        advance_kitty_cursor(&mut parser, &command);
-
-        assert_eq!(parser.screen().cursor_position(), (6, 12));
-    }
-
-    #[test]
-    fn kitty_pixel_dimensions_advance_native_size_placement() {
-        let command = GraphicCommand {
-            format: GraphicFormat::Kitty,
-            seq: 1,
-            row: 0,
-            col: 0,
-            alternate_screen: false,
-            data: Vec::new(),
-            kitty_metadata: Some(crate::pane::graphics::KittyControlData {
-                a: Some("T".to_string()),
-                s: Some(30),
-                v: Some(40),
-                ..Default::default()
-            }),
-            reemit: None,
-            pixel_size: None,
-            file_bytes: None,
-        };
-        let mut parser = vt100::Parser::new(24, 80, 100);
-
-        advance_kitty_cursor(&mut parser, &command);
-
-        assert_eq!(parser.screen().cursor_position(), (2, 3));
-    }
-
-    #[test]
-    fn kitty_no_cursor_movement_flag_is_respected() {
-        let mut command = GraphicCommand {
-            format: GraphicFormat::Kitty,
-            seq: 1,
-            row: 0,
-            col: 0,
-            alternate_screen: false,
-            data: Vec::new(),
-            kitty_metadata: Some(crate::pane::graphics::KittyControlData {
-                a: Some("T".to_string()),
-                c: Some(3),
-                r: Some(2),
-                C: Some(1),
-                ..Default::default()
-            }),
-            reemit: None,
-            pixel_size: None,
-            file_bytes: None,
-        };
-        let mut parser = vt100::Parser::new(24, 80, 100);
-        advance_kitty_cursor(&mut parser, &command);
-        assert_eq!(parser.screen().cursor_position(), (0, 0));
-        command.kitty_metadata.as_mut().unwrap().C = Some(0);
-        advance_kitty_cursor(&mut parser, &command);
-        assert_eq!(parser.screen().cursor_position(), (2, 3));
     }
 
     #[test]

@@ -153,6 +153,12 @@ pub struct ServerCore {
     /// scroll out of view, alternate screen swap); the next visible frame
     /// needs an ed-two repaint to wipe the stale pixels before re-placing
     sixel_restore_pending: bool,
+    /// a sixel/iterm2 placement that was visible moved (or left the
+    /// viewport) after the pane's content scrolled. sixel pixels cannot be
+    /// moved or deleted, so this frame needs an ed-two repaint. kept apart
+    /// from `reemit_gfx` so an old image parked in the scrollback does not
+    /// force a full repaint on every line of output.
+    sixel_repaint: bool,
     /// per-pane foreground app running state, refreshed every 250 ms;
     /// busy -> idle transitions trigger graphics cleanup for the pane
     pane_app_running: HashMap<PaneId, bool>,
@@ -291,6 +297,7 @@ impl ServerCore {
             reemit_gfx: false,
             reposition_kitty: false,
             sixel_restore_pending: false,
+            sixel_repaint: false,
             pane_app_running: HashMap::new(),
             emitted_gfx: HashSet::new(),
             hidden_gfx: HashSet::new(),
@@ -486,14 +493,26 @@ impl ServerCore {
 
     /// shifts stored graphic commands after pane content scrolls, and detects
     /// scrollback navigation. returns true when any pane holding graphics was
-    /// shifted; callers should force a full redraw in that case.
+    /// shifted; callers re-place kitty placements and force a full redraw when
+    /// a visible sixel/iterm2 image moved.
     fn shift_graphics_for_scroll(&mut self) -> bool {
+        let (layout_cols, layout_rows) = self.effective_size();
+        let (_, _, _, content) = self.chrome_areas(Rect::new(0, 0, layout_cols, layout_rows));
+        let rects = self
+            .session
+            .layout(content, self.gap_inner(), self.gap_outer());
+        let border = self.border_enabled(rects.len());
+        let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
         let pane_ids: Vec<PaneId> = self.session.panes.keys().copied().collect();
         let mut moved = false;
         for id in pane_ids {
             let Some(pane) = self.session.panes.get(&id) else {
                 continue;
             };
+            let inner = rects
+                .iter()
+                .find(|(pid, _)| *pid == id)
+                .map(|(_, rect)| inner_rect(*rect, border));
             let (alternate_screen, scroll_count) = pane
                 .parser
                 .lock()
@@ -512,6 +531,34 @@ impl ServerCore {
             if shift != 0
                 && let Ok(mut store) = pane.graphics.lock()
             {
+                let visible = |store: &crate::pane::graphics::PaneGraphicsStore| {
+                    let Some(inner) = inner else {
+                        return false;
+                    };
+                    if inner.width == 0 || inner.height == 0 {
+                        return false;
+                    }
+                    store.active_commands().iter().any(|cmd| {
+                        if cmd.alternate_screen != alternate_screen {
+                            return false;
+                        }
+                        match cmd.format {
+                            crate::pane::GraphicFormat::Sixel => cmd.sixel_visible_in_pane(
+                                inner.width,
+                                inner.height,
+                                pane.scroll_offset,
+                                cell_w,
+                                cell_h,
+                            ),
+                            crate::pane::GraphicFormat::Iterm2 => {
+                                let row = cmd.row + pane.scroll_offset as i32;
+                                row >= 0 && row < i32::from(inner.height) && cmd.col < inner.width
+                            }
+                            crate::pane::GraphicFormat::Kitty => false,
+                        }
+                    })
+                };
+                let was_visible = visible(&store);
                 store.scroll_screen_rows(shift, alternate_screen);
                 // a placement anchored further above the grid than the
                 // retained scrollback is gone for good: free it and tell the
@@ -523,6 +570,12 @@ impl ServerCore {
                     -(self.config.general.scrollback as i32)
                 };
                 let freed = store.drop_screen_scrolled_out(limit, Some(alternate_screen));
+                // sixel/iterm2 pixels are burned into the host grid: any
+                // visible-image move (or a visible image leaving the viewport)
+                // needs an ed-two repaint to erase the old copy.
+                if was_visible || visible(&store) {
+                    self.sixel_repaint = true;
+                }
                 for command in freed {
                     let Some(metadata) = command.kitty_metadata.as_ref() else {
                         continue;
@@ -751,6 +804,13 @@ impl ServerCore {
             let Some(pane) = self.session.panes.get_mut(id) else {
                 continue;
             };
+            // the alt-screen app is gone: its sixels have no host-side delete
+            // and its kitty placements are dropped below, so remove the alt
+            // commands from the store as well. otherwise a later alt-screen
+            // app would resurrect images from the previous one.
+            if let Ok(mut store) = pane.graphics.lock() {
+                store.clear_screen_images(true);
+            }
             let removed = pane
                 .graphics
                 .lock()
@@ -3582,13 +3642,31 @@ impl ServerCore {
             return;
         }
 
+        // a child that erased its screen (clear, vim startup, RIS) owns the
+        // blank grid: drop that screen's stored images and repaint fully so a
+        // later redraw cannot resurrect an image the app erased.
+        let screen_cleared = self
+            .session
+            .panes
+            .values()
+            .any(|pane| pane.screen_cleared.swap(false, Ordering::AcqRel));
+        if screen_cleared {
+            for pane in self.session.panes.values() {
+                if let Ok(mut store) = pane.graphics.lock() {
+                    store.clear_screen_images(false);
+                }
+            }
+            self.force_full = true;
+            self.ui_dirty = true;
+        }
+
         self.update_toast();
 
         // re-anchor stored graphics after scroll output or scrollback navigation.
-        // anchor moves are handled by cheap delete/place re-emission instead of
-        // a full redraw, so pixels are never re-sent on ordinary output.
+        // kitty placements can be re-placed cheaply; sixel/iterm2 pixels only
+        // move via a full ED2 repaint, and only when the image was on screen.
         if self.config.general.graphics && self.shift_graphics_for_scroll() {
-            self.reemit_gfx = true;
+            self.reposition_kitty = true;
         }
         let gap_inner = self.gap_inner();
         let (eff_cols, eff_rows) = self.effective_size();
@@ -3603,12 +3681,10 @@ impl ServerCore {
         // placements are invalidated and the child re-emits them after SIGWINCH.
         let mut any_resized = false;
         for (id, rect) in &eff_rects {
-            // during animation, skip PTY resize to avoid constant resizing.
-            // use animated rect for rendering instead, which is smoother.
-            if self.pane_animations.has_active() {
-                continue;
-            }
-
+            // resize the PTY to its final geometry even while an animation is
+            // running: the child (vim, yazi, ...) needs SIGWINCH to redraw at
+            // the new size. the animated rect is rendering-only; the pty size
+            // is the destination. last_sizes dedups repeated identical sizes.
             let inner = inner_rect(*rect, border);
             let size = (inner.width.max(1), inner.height.max(1));
 
@@ -3730,29 +3806,60 @@ impl ServerCore {
         // Kitty keeps its pixel data on the host and can use cheap placements.
         // Sixel and iTerm2 have no placement operation, so a scroll requires a
         // clear before replaying the stored image at its new location.
+        // Also, whenever graphics change (an image was unselected, replaced, or
+        // a new image was selected), the old Sixel pixels must be physically erased
+        // using ED2 before new content or images paint over the area.
+        let live_graphics: HashSet<(PaneId, u64)> = self
+            .session
+            .panes
+            .iter()
+            .flat_map(|(id, pane)| {
+                pane.graphics
+                    .lock()
+                    .map(|store| {
+                        store
+                            .active_commands()
+                            .iter()
+                            .map(|cmd| (*id, cmd.seq))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        // Any previously emitted graphic that is no longer active, or any new
+        // image arriving while a sixel was already emitted, requires ED2 to wipe
+        // host terminal pixels clean.
+        let graphics_changed = self.clients.values().any(|client| {
+            client
+                .emitted_gfx
+                .iter()
+                .any(|key| !live_graphics.contains(key))
+                || (sixel_any
+                    && !client.emitted_gfx.is_empty()
+                    && live_graphics
+                        .iter()
+                        .any(|key| !client.emitted_gfx.contains(key)))
+        }) || (!self.emitted_gfx.is_empty()
+            && self
+                .emitted_gfx
+                .iter()
+                .any(|key| !live_graphics.contains(key)))
+            || (sixel_any
+                && !self.emitted_gfx.is_empty()
+                && live_graphics
+                    .iter()
+                    .any(|key| !self.emitted_gfx.contains(key)));
+
+        let sixel_repaint = std::mem::take(&mut self.sixel_repaint);
         let sixel_needs_ed2 = graphics_scroll_needs_ed2(scroll, sixel_any, iterm2_any)
+            || sixel_repaint
+            || graphics_changed
             || (sixel_visible
                 && (modal_open_now || self.pane_animations.has_active() || sixel_restore));
         // drop tracking entries for graphics that no longer exist (the store
         // re-assigns seqs on every re-push, so stale keys would pile up forever)
         if sixel_any || !self.emitted_gfx.is_empty() {
-            let live: HashSet<(PaneId, u64)> = self
-                .session
-                .panes
-                .iter()
-                .flat_map(|(id, pane)| {
-                    pane.graphics
-                        .lock()
-                        .map(|store| {
-                            store
-                                .active_commands()
-                                .iter()
-                                .map(|cmd| (*id, cmd.seq))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()
-                })
-                .collect();
+            let live = &live_graphics;
             self.emitted_gfx.retain(|key| live.contains(key));
             self.hidden_gfx.retain(|key| live.contains(key));
             for client in self.clients.values_mut() {
@@ -4030,6 +4137,7 @@ impl ServerCore {
                         // screen, so an anchored image moves down with it:
                         // row + scroll_offset.
                         let adjusted_row = cmd.row + pane.scroll_offset as i32;
+                        let is_sixel = cmd.format == crate::pane::GraphicFormat::Sixel;
 
                         // partially scrolled-out direct kitty placements are
                         // re-placed cropped to the visible fragment instead of
@@ -4038,48 +4146,85 @@ impl ServerCore {
                         let crop =
                             cmd.crop_placement(inner.width, inner.height, pane.scroll_offset);
 
+                        // sixels that overflow the pane to the right/bottom are
+                        // truncated at the token level (no re-quantization):
+                        // foot would otherwise scroll the whole host grid when
+                        // the DCS crosses the bottom margin.
+                        let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
+                        let sixel_crop = if is_sixel {
+                            cmd.crop_sixel_placement(
+                                inner.width,
+                                inner.height,
+                                pane.scroll_offset,
+                                cell_w,
+                                cell_h,
+                            )
+                        } else {
+                            None
+                        };
+
                         // graphics that are entirely outside the pane are
                         // skipped; a placement that only overflows the pane
                         // edge is cropped to the pane instead.
                         let out_of_view = adjusted_row < 0
                             || adjusted_row >= i32::from(inner.height)
                             || cmd.col >= inner.width;
-                        if out_of_view && !force_full {
-                            // a placement clipped by the top/bottom edge keeps
-                            // emitting (the crop path below re-places the
-                            // visible fragment); anything fully out of view
-                            // stays hidden.
-                            let clipped_but_visible = cmd.format
-                                == crate::pane::GraphicFormat::Kitty
+                        // sixels that are fully out of view are skipped; partially
+                        // visible ones (including top-clipped) are cropped and shown.
+                        if is_sixel
+                            && !cmd.sixel_visible_in_pane(
+                                inner.width,
+                                inner.height,
+                                pane.scroll_offset,
+                                cell_w,
+                                cell_h,
+                            )
+                            && !force_full
+                        {
+                            continue;
+                        }
+                        if out_of_view
+                            && !force_full
+                            && !is_sixel
+                            && !(cmd.format == crate::pane::GraphicFormat::Kitty
                                 && cmd.visible_in_pane(
                                     inner.width,
                                     inner.height,
                                     pane.scroll_offset,
                                 )
-                                && crop.is_some();
-                            if !clipped_but_visible {
-                                continue;
-                            }
+                                && crop.is_some())
+                        {
+                            continue;
                         }
 
                         // the anchor of the placement on screen: a cropped
                         // fragment starts at its own cell inside the pane.
-                        let (row, col) = crop.as_ref().map_or_else(
-                            || {
+                        // For Sixel, prefer the sixel_crop anchor; fall back
+                        // to the kitty crop anchor, then the raw placement.
+                        let (row, col) = sixel_crop
+                            .as_ref()
+                            .map(|(_, vis_col, vis_row)| {
+                                (
+                                    inner.y.saturating_add(*vis_row),
+                                    inner.x.saturating_add(*vis_col),
+                                )
+                            })
+                            .or_else(|| {
+                                crop.as_ref().map(|(_, vis_col, vis_row)| {
+                                    (
+                                        inner.y.saturating_add(*vis_row),
+                                        inner.x.saturating_add(*vis_col),
+                                    )
+                                })
+                            })
+                            .unwrap_or_else(|| {
                                 (
                                     inner.y.saturating_add(adjusted_row.max(0) as u16),
                                     inner
                                         .x
                                         .saturating_add(cmd.col.min(inner.width.saturating_sub(1))),
                                 )
-                            },
-                            |(_, vis_col, vis_row)| {
-                                (
-                                    inner.y.saturating_add(*vis_row),
-                                    inner.x.saturating_add(*vis_col),
-                                )
-                            },
-                        );
+                            });
 
                         let format = match cmd.format {
                             crate::pane::GraphicFormat::Sixel => crate::proto::GfxFormat::Sixel,
@@ -4091,7 +4236,30 @@ impl ServerCore {
                         // image was hidden and is being revealed again, during animation,
                         // or when a scroll reflow shifted anchors (reemit_gfx).
 
-                        let fresh = if let Some((crop_data, _, _)) = &crop {
+                        // For Sixel: use the cropped DCS bytes when the image overflows
+                        // the pane, otherwise use the full payload. Sixel has no
+                        // separate "placement" command - the DCS itself IS the placement.
+                        let fresh = if let Some((sixel_data, _, _)) = sixel_crop {
+                            // Sixel has no placement command: re-sending the
+                            // truncated DCS paints a second copy on top of the
+                            // old pixels. emit it only on the first paint or
+                            // on a full repaint (which ED2s the old pixels).
+                            let was_hidden = client.hidden_gfx.remove(&key);
+                            if !was_emitted || force_full || was_hidden || is_animating {
+                                client.emitted_gfx.insert(key);
+                                Some(sixel_data)
+                            } else {
+                                None
+                            }
+                        } else if is_sixel {
+                            let was_hidden = client.hidden_gfx.remove(&key);
+                            if !was_emitted || force_full || was_hidden || is_animating {
+                                client.emitted_gfx.insert(key);
+                                Some(cmd.emission_payload())
+                            } else {
+                                None
+                            }
+                        } else if let Some((crop_data, _, _)) = &crop {
                             // A cropped placement references image pixels by id.
                             // Upload them first for a new client, then replace
                             // the initial oversized placement with the clipped
@@ -4314,19 +4482,11 @@ impl ServerCore {
                             continue;
                         }
 
-                        // during animation, only redraw if this specific pane's rect changed
-                        // this avoids full screen repaints on every animation frame
-                        let should_render_content = if self.pane_animations.has_active() {
-                            // only render if this pane is animating
-                            self.pane_animations.get_animated_rect(*id).is_some()
-                        } else {
-                            true
-                        };
-
-                        if !should_render_content {
-                            continue;
-                        }
-
+                        // every pane must be drawn on every frame: ratatui
+                        // resets the back buffer after each draw, so a cell
+                        // that is not repainted is diffed as blank and the
+                        // client erases it. skipping "unchanged" panes made
+                        // the whole layout blank during animations.
                         if let Ok(mut parser) = pane.parser.lock() {
                             parser.screen_mut().set_scrollback(pane.scroll_offset);
 

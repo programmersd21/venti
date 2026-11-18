@@ -126,8 +126,14 @@ impl PaneAnimationManager {
             .retain(|_, anim| !anim.tracker.is_finished());
     }
 
+    /// true while at least one animation is still running. finished trackers
+    /// keep their entry until `cleanup_finished` runs, so checking emptiness
+    /// here would treat a finished animation (or a disabled one, whose tracker
+    /// is finished on creation) as still active.
     pub fn has_active(&self) -> bool {
-        !self.animations.is_empty()
+        self.animations
+            .values()
+            .any(|anim| !anim.tracker.is_finished())
     }
 
     pub fn is_animating(&self, pane_id: PaneId) -> bool {

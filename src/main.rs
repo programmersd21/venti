@@ -128,9 +128,6 @@ fn main() -> anyhow::Result<()> {
             let faint = |s: &str| cli_help::paint(OVERLAY, s);
 
             let mut protos = Vec::new();
-            if venti::util::outer_term::kitty_supported() {
-                protos.push(ok("kitty"));
-            }
             if venti::util::outer_term::sixel_supported() {
                 protos.push(ok("sixel"));
             }

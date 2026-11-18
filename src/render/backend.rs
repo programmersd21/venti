@@ -133,6 +133,10 @@ impl Backend for ClientBackend {
             }
         };
         for (x, y, cell) in content {
+            #[allow(deprecated)]
+            if cell.skip {
+                continue;
+            }
             let (fg, bg, underline_color) = (
                 to_proto(cell.fg),
                 to_proto(cell.bg),

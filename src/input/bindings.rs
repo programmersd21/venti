@@ -74,6 +74,9 @@ impl KeyBindings {
     ///
     /// f keys always drive venti. alt keys drive venti too; applications
     /// receive alt only for combos listed in `input.passthrough`.
+    ///
+    /// fallback: if an alt+shift combination does not match, retry with just alt.
+    /// this compensates for host terminals that strip shift from alt-modified keys.
     pub fn find(&self, mode: InputMode, key: &Key) -> Option<&Command> {
         if self.disabled.contains(key) {
             return None;
@@ -81,7 +84,29 @@ impl KeyBindings {
         if mode == InputMode::Normal && self.passthrough.contains(key) {
             return None;
         }
-        self.bindings.get(&(mode, key.clone()))
+        
+        // try exact match first
+        if let Some(cmd) = self.bindings.get(&(mode, key.clone())) {
+            return Some(cmd);
+        }
+        
+        // fallback: if alt+shift, try alt without shift
+        if key.modifiers.alt && key.modifiers.shift && !key.modifiers.ctrl && !key.modifiers.super_key {
+            let fallback_key = Key::new(
+                key.code.clone(),
+                Modifiers {
+                    ctrl: false,
+                    alt: true,
+                    shift: false,
+                    super_key: false,
+                },
+            );
+            if let Some(cmd) = self.bindings.get(&(mode, fallback_key)) {
+                return Some(cmd);
+            }
+        }
+        
+        None
     }
 
     /// iterates over all bindings in the given mode.
@@ -234,6 +259,38 @@ impl KeyBindings {
         m.insert(
             (InputMode::Normal, Key::alt(KeyCode::Char('q'))),
             Command::ClosePane,
+        );
+
+        // alt+shift bindings for all profiles
+        let alt_shift = Modifiers {
+            ctrl: false,
+            alt: true,
+            shift: true,
+            super_key: false,
+        };
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Char('h'), alt_shift)),
+            Command::SwapLeft,
+        );
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Char('j'), alt_shift)),
+            Command::SwapDown,
+        );
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Char('k'), alt_shift)),
+            Command::SwapUp,
+        );
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Char('l'), alt_shift)),
+            Command::SwapRight,
+        );
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Left, alt_shift)),
+            Command::MoveToWorkspacePrev,
+        );
+        m.insert(
+            (InputMode::Normal, Key::new(KeyCode::Right, alt_shift)),
+            Command::MoveToWorkspaceNext,
         );
     }
 

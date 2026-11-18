@@ -29,7 +29,7 @@ impl Default for GeneralConfig {
             shell: String::new(),
             scrollback: 10000,
             osc52: true,
-            graphics: false,
+            graphics: true,
             default_workspaces: 1,
             workspace_names: vec!["ws1".to_string()],
             confirm_close_running: true,

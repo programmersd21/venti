@@ -1,31 +1,43 @@
-# zsh
+# zsh integration
 
-venti 0.1.0 | 2026-11-16 | linux only
+instructions and tips for running venti with zsh.
 
-venti runs whatever shell you launch it with; zsh, bash, fish and elvish all
-work, and only zsh gets a completion script installed by convention.
+## shell setup
 
-## completions
-
-```sh
-mkdir -p ~/.zfunc
-venti completions zsh > ~/.zfunc/_venti
-```
-
-fish users: `venti completions fish > ~/.config/fish/completions/venti.fish`.
-the same command works for `bash` and `elvish`; redirect the script into a
-directory the shell reads.
-
-in `~/.zshrc`, before `compinit`:
+add the following to `~/.zshrc` to ensure correct terminal environment inside venti:
 
 ```zsh
-fpath=(~/.zfunc $fpath)
-autoload -uz compinit && compinit
+# disable prompt redrawing on terminal resize if your theme flickers
+if [[ -n "$VENTI" ]]; then
+  # running inside a venti pane
+  export TERM="${TERM:-xterm-256color}"
+fi
 ```
 
-## default shell inside panes
+## shell completions
 
-```toml
-[general]
-shell = "/bin/zsh"
+venti can generate native shell completion scripts via `clap_complete`.
+
+### generating zsh completions
+```zsh
+mkdir -p ~/.zsh/completions
+venti completion zsh > ~/.zsh/completions/_venti
+```
+
+add to `~/.zshrc` (before `compinit`):
+```zsh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit
+compinit
+```
+
+## quick aliases
+
+recommended shortcuts in `~/.zshrc`:
+```zsh
+alias v="venti"
+alias vn="venti new -s"
+alias vls="venti ls"
+alias va="venti attach -s"
+alias vk="venti kill -t"
 ```

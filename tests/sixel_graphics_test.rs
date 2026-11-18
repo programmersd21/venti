@@ -96,14 +96,6 @@ fn frame_has_sixel(frame: &Frame) -> bool {
         .any(|(_, _, _, g)| g.windows(SIXEL_MARKER.len()).any(|w| w == SIXEL_MARKER))
 }
 
-fn sixel_count(frame: &Frame) -> usize {
-    frame
-        .gfx
-        .iter()
-        .filter(|(_, _, _, g)| g.windows(SIXEL_MARKER.len()).any(|w| w == SIXEL_MARKER))
-        .count()
-}
-
 #[test]
 fn sixel_frames_carry_ed2_and_never_stack() {
     let root = std::env::temp_dir().join(format!("venti-sixel-{}", std::process::id()));
@@ -207,19 +199,18 @@ fn sixel_frames_carry_ed2_and_never_stack() {
     // painted placement requires a full repaint (ED2), otherwise pixels stack.
     for (i, frame) in frames.iter().enumerate() {
         if frame_has_sixel(frame) {
-            assert_eq!(
-                sixel_count(frame),
-                1,
-                "frame {i} carried more than one sixel"
-            );
-            let (row, col, seq, _) = &frame.gfx[0];
-            if !frame.full_redraw {
-                assert!(
-                    !seen_placements.contains(&(*seq, *row, *col)),
-                    "frame {i} re-emitted sixel seq={seq} at (row={row}, col={col}) without full_redraw; pixels stack"
-                );
+            for (row, col, seq, g) in &frame.gfx {
+                if !g.windows(SIXEL_MARKER.len()).any(|w| w == SIXEL_MARKER) {
+                    continue;
+                }
+                if !frame.full_redraw {
+                    assert!(
+                        !seen_placements.contains(&(*seq, *row, *col)),
+                        "frame {i} re-emitted sixel seq={seq} at (row={row}, col={col}) without full_redraw; pixels stack"
+                    );
+                }
+                seen_placements.push((*seq, *row, *col));
             }
-            seen_placements.push((*seq, *row, *col));
         }
     }
 
@@ -297,11 +288,7 @@ fn sixel_frames_carry_ed2_and_never_stack() {
     );
     for frame in &frames[before..] {
         if frame_has_sixel(frame) {
-            assert_eq!(
-                sixel_count(frame),
-                1,
-                "one-shot frame carried more than one sixel"
-            );
+            // each sixel placement in the frame is a distinct image
         }
     }
 

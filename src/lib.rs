@@ -23,6 +23,7 @@ pub mod pane;
 pub mod proto;
 pub mod render;
 pub mod server;
+pub mod sixel;
 pub mod util;
 
 pub use config::{Config, Theme};

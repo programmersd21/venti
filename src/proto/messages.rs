@@ -9,7 +9,7 @@ pub enum CursorShape {
     Bar,
 }
 
-/// kind of graphics sequence carried by a graphics command.
+/// kind of graphics sequence carried by a graphics command. In v0.2, Venti is Sixel-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GfxFormat {
     Sixel,

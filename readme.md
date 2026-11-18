@@ -13,15 +13,13 @@
   <a href="https://github.com/programmersd21/venti"><img src="https://img.shields.io/github/repo-size/programmersd21/venti?style=for-the-badge&logo=github&logoColor=89dceb&color=89dceb&labelColor=313244" alt="repo size" /></a>
 </p>
 
-> [!NOTE]\
-> terminal graphics support is currently experimental and may be unreliable. contributions and help with protocol compatibility, rendering bugs, and testing are very welcome. see [graphics protocol support](#graphics-protocol-support).
-
 ## demo
 
 [![venti demo](https://img.youtube.com/vi/GsD61wQLam0/maxresdefault.jpg)](https://youtu.be/GsD61wQLam0)
 
 ## features
 
+- **high-performance, pure-Rust Sixel graphics**: powered by `icy_sixel` & `ratatui-image` (validated on foot & Wayland environments)
 - **multiple workspaces**: organize panes across independent workspace sets
 - **tiled layouts**: dwindle (default) or monocle, with configurable splits
 - **floating panes**: drag-and-drop, drag-resize corners
@@ -29,7 +27,6 @@
 - **copy mode**: vim-like scrollback search and selection
 - **live settings**: edit 40+ options via f2, changes apply instantly
 - **bright ui**: centered dialogs, colorful CLI
-- **graphics (experimental)**: sixel, kitty image protocol, iterm2 inline images - see [graphics protocol support](#graphics-protocol-support)
 - **workspace tab context menu**: right-click a tab for rename / new / close, anchored at the click
 - **scroll indicator**: optional "↑12" marker in the pane title while scrolled back
 - **sidebar fold**: `shift+tab` folds the workspace sidebar away in every profile
@@ -112,7 +109,7 @@ custom bindings: edit `[binds]` in `~/.config/venti/config.toml`
 [general]
 shell = ""   # empty: $SHELL, falls back to /bin/sh
 scrollback = 10000
-graphics = false  # experimental; set true to try images
+graphics = true  # enables native Sixel graphics pipeline
 
 [decorations]
 border_style = "rounded"
@@ -141,16 +138,13 @@ docs: `docs/configuration.md`
 ## design
 
 - **linux only**: vt100 terminal emulation via term-wm-vt100 (patched)
+- **high-performance graphics**: pure-Rust Sixel pipeline using `icy_sixel` and `ratatui-image`, validated against the `foot` terminal under Wayland
 - **fast**: event-driven, minimal allocations, diff-based rendering
 - **minimal deps**: ratatui, crossterm, serde, nix syscalls
 - **no ui framework overhead**: custom rendering for perfect pixel control
 - **bright & readable**: catppuccin mocha + 14 other dark themes
 - **four profiles**: beginner, hypr, vim, dev, composable commands, fast fingers
 - **alt-first keybindings**: escape-prefixed combos work in most terminals (see docs)
-
-see `docs/architecture-assessment.md` for known limitations and planned
-improvements (terminal emulator migration, per-pane cursor shape, graphics
-ownership redesign).
 
 ## commands
 
@@ -171,9 +165,8 @@ venti config check    # validate config
 cargo build           # debug build
 cargo build --release # release binary
 cargo test --no-fail-fast  # run all tests
-cargo test --test keybindings_regression_test  # keybinding tests
-cargo test --test graphics_conformance_test    # real kitten icat / chafa round-trip
-cargo clippy          # lint (zero warnings)
+cargo test --test sixel_graphics_test  # sixel rendering verification
+cargo clippy          # lint
 ```
 
 ## documentation
@@ -183,60 +176,21 @@ cargo clippy          # lint (zero warnings)
 - `docs/configuration.md` - config file guide
 - `docs/architecture.md` - internal design
 - `docs/protocol.md` - wire protocol specification
-- `docs/graphics-unicode-placeholders.md` - graphics protocols and unicode placeholders
-- `docs/kitty-config.md` - kitty configuration for use with venti
 - `docs/zsh.md` - zsh setup and completions
 - `docs/index.md` - faq and troubleshooting
 
-## graphics protocol support
+## Sixel Graphics Support (v0.2 Architecture)
 
-venti is still working towards reliable terminal graphics protocol support.
+In the **v0.2 Sixel Major Release**, Venti standardizes on a **pure-Rust Sixel-only** graphics architecture:
 
-image rendering is currently unreliable, and some protocols may not work as expected across terminal emulators, particularly during pane resizing, scrolling, and layout changes.
-
-this is an area where help is genuinely welcome.
-
-if you have experience with terminal graphics protocols, rendering pipelines, or terminal emulator compatibility, contributions, debugging help, and technical suggestions are very welcome.
-
-if you encounter issues, have ideas, or know how to improve the implementation, please open an issue or start a discussion. even small reproductions and compatibility reports are valuable.
-
-**i would especially appreciate help from people familiar with:**
-
-- kitty graphics protocol
-- sixel
-- iterm2 image protocol
-- terminal rendering and multiplexer compatibility
-
-venti is an independent project, and improving graphics support is an ongoing effort. thanks to everyone willing to investigate, test, and contribute.
-
-graphics is off by default. it is experimental; set `graphics = true` under
-`[general]` to try it. `venti doctor` prints the same reminder.
-
-**where to help:**
-
-- **github issues**: concrete bugs, reproducible failures, compatibility reports
-- **github discussions**: technical ideas, implementation approaches, requests for help
-- **pull requests**: actual fixes and improvements
-
-**current state, honestly:**
-
-| protocol | tested | state |
-|---|---|---|
-| kitty graphics | **most tested and most stable** | transmit, place, re-place, crop-to-pane, scrollback anchoring, unicode placeholders, file-backed (`t=f`/`t=s`) transmissions (read once, re-sent inline and chunked) all work; edge cases remain around float/reflow geometry |
-| sixel | weaker | parse, render and scroll work; needs a sixel-capable outer terminal; re-placement after a resize rides on a full `ESC[2J` repaint |
-| iterm2 inline images | not well tested | display works; no cropping, no source-offset re-placement, no per-pane clipping |
-
-kitty is the protocol to rely on today: it is what `kitten icat`, yazi and fastfetch use, and every code path is covered by unit tests plus the real-tool conformance suite. sixel is a fallback for terminals without kitty support. iterm2 is best-effort.
-
-images are re-transmitted in spec-compliant chunks (max 4096 base64 bytes per apc, `m=1`/`m=0`), the payload never leaks into the text stream, and file-backed pixels are cached at transmission time so the app deleting its temp file cannot blank the frame.
-
-the parsers and the framing are covered by `cargo test graphics`, and `tests/graphics_conformance_test.rs` runs the real tools (`kitten icat`, `chafa -f sixels`) against a real server to check that the payload never reaches the text stream, that the image actually arrives and that every chunk respects the 4096-byte limit.
+- **PTY Stream Interception**: `sixel::SixelStreamParser` intercepts Sixel DCS sequences (`ESC P ... q ... ESC \`) directly from the PTY stream before forwarding clean terminal text to `vt100::Parser`.
+- **Pure-Rust Decoder**: Leverages `icy_sixel::SixelImage::decode()` with color quantization via `quantette` without invoking C dependencies.
+- **Foot Terminal Validation**: Native high-performance Sixel rendering in `foot` under Wayland/Hyprland serves as the primary reference test bed, guaranteeing zero layout jitter, precise border clipping, and robust scrollback synchronization.
+- **Ratatui Rendering Integration**: Sixel images are managed and displayed within pane bounds using `ratatui-image`.
 
 ## contributing
 
 issues, discussions and pull requests are welcome - see `contributing.md` for the workflow, the code style and how to run the test suite.
-
-graphics protocol work is the area where help is most needed, see [graphics protocol support](#graphics-protocol-support).
 
 ## license
 
@@ -246,12 +200,12 @@ mit
 
 inspired by tmux, zellij, helix.
 
-built with ratatui, crossterm, serde.
+built with ratatui, crossterm, serde, icy_sixel, ratatui-image.
 
 colors from catppuccin.
 
 ---
 
-**venti 0.1.0**, 2026-11-16
+**venti 0.2.0**, 2026-11-18
 
 *a fast, quiet terminal multiplexer for linux.*

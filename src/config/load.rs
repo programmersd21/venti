@@ -369,7 +369,7 @@ osc52 = true
 # terminal graphics support is experimental: an image can land in the wrong
 # place or leave pixels behind after a repaint. off by default; set true to
 # try it, and false again if images misbehave.
-graphics = false
+graphics = true
 # default number of initial workspaces to create
 default_workspaces = 1
 # friendly display names for default numbered workspaces

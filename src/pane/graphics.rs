@@ -243,6 +243,7 @@ pub struct KittyChunkBuffer {
     pub payload: Vec<u8>,
 }
 
+/// cached cropped sixel payload for the last viewport it was rendered into.
 /// placement and raw byte command of a graphic sequence.
 #[derive(Debug, Clone)]
 pub struct GraphicCommand {
@@ -737,8 +738,8 @@ impl GraphicCommand {
         place_ctl.X = metadata.X;
         place_ctl.Y = metadata.Y;
         // venti positions the host cursor itself; tell the host not to move
-    // it after the placement so text after the image stays where it belongs.
-    place_ctl.C = Some(1);
+        // it after the placement so text after the image stays where it belongs.
+        place_ctl.C = Some(1);
 
         let mut out = kitty_apc(&del_ctl);
         out.extend_from_slice(&kitty_apc(&place_ctl));
@@ -795,6 +796,115 @@ impl GraphicCommand {
             .as_deref()
             .filter(|action| matches!(*action, "T" | "p"))
             .and_then(|_| reemit_placement(metadata));
+    }
+
+    /// truncates a Sixel placement to the visible viewport.
+    ///
+    /// Sixel has no placement/delete command: the DCS payload itself is the
+    /// image, so an image that overflows its pane would paint over borders and
+    /// neighbouring panes. Re-quantizing the crop (decode -> RGBA -> encode) is
+    /// far too slow for live scrolling (hundreds of milliseconds per frame for
+    /// a full-size preview), so instead the original sixel token stream is
+    /// truncated: trailing pixel columns and bands outside the viewport are
+    /// dropped, the last partial band is bit-masked, and the raster
+    /// attributes are rewritten to the visible size. Colours, palette and
+    /// quality are preserved and the pass is linear in the payload size.
+    ///
+    /// returns `(cropped_dcs_bytes, viewport_col, viewport_row)` when the
+    /// image overflows the pane to the right or bottom, or `None` when it
+    /// fits completely or is clipped at the top (the caller hides top-clipped
+    /// sixels: a sixel cannot skip leading bands, so the visible fragment
+    /// would start at the wrong row).
+    pub fn crop_sixel_placement(
+        &self,
+        pane_cols: u16,
+        pane_rows: u16,
+        scroll_offset: usize,
+        cell_w: u32,
+        cell_h: u32,
+    ) -> Option<(Vec<u8>, u16, u16)> {
+        if self.format != GraphicFormat::Sixel {
+            return None;
+        }
+        let (px_w, px_h) = self.pixel_size?;
+        if px_w == 0 || px_h == 0 {
+            return None;
+        }
+        let cell_w = cell_w.max(1);
+        let cell_h = cell_h.max(1);
+        let origin_col = i64::from(self.col);
+        let origin_row =
+            i64::from(self.row).saturating_add(i64::try_from(scroll_offset).unwrap_or(i64::MAX));
+
+        let avail_cols = (i64::from(pane_cols) - origin_col).max(0) as u64;
+        let avail_rows = (i64::from(pane_rows) - origin_row).max(0) as u64;
+        let max_cols_px = (u64::from(px_w)).min(avail_cols.saturating_mul(u64::from(cell_w)));
+        let max_rows_px = (u64::from(px_h)).min(avail_rows.saturating_mul(u64::from(cell_h)));
+        if max_cols_px == 0 || max_rows_px == 0 {
+            return None;
+        }
+        if max_cols_px >= u64::from(px_w)
+            && max_rows_px >= u64::from(px_h)
+            && origin_row >= 0
+            && origin_col >= 0
+        {
+            return None;
+        }
+
+        let skip_x_px = if origin_col < 0 {
+            ((-origin_col) as u64 * u64::from(cell_w)).min(u64::from(px_w)) as usize
+        } else {
+            0
+        };
+        let skip_y_px = if origin_row < 0 {
+            ((-origin_row) as u64 * u64::from(cell_h)).min(u64::from(px_h)) as usize
+        } else {
+            0
+        };
+        let _ = (max_cols_px, max_rows_px);
+
+        let skip_top_bands = (skip_y_px / 6) as u32;
+        let skip_left_cols = skip_x_px as u32;
+        let data = truncate_sixel(
+            &self.data,
+            skip_top_bands,
+            skip_left_cols,
+            max_cols_px as u32,
+            max_rows_px as u32,
+        )?;
+        let vc = origin_col.max(0) as u16;
+        let vr = origin_row.max(0) as u16;
+        Some((data, vc, vr))
+    }
+
+    pub fn sixel_visible_in_pane(
+        &self,
+        pane_cols: u16,
+        pane_rows: u16,
+        scroll_offset: usize,
+        cell_w: u32,
+        cell_h: u32,
+    ) -> bool {
+        if self.format != GraphicFormat::Sixel {
+            return false;
+        }
+        let cell_w = cell_w.max(1);
+        let cell_h = cell_h.max(1);
+        let adjusted_row = self.row + scroll_offset as i32;
+        let img_rows = self
+            .pixel_size
+            .map(|(_, h)| h.div_ceil(cell_h) as i32)
+            .unwrap_or(1);
+        let img_cols = self
+            .pixel_size
+            .map(|(w, _)| w.div_ceil(cell_w) as i32)
+            .unwrap_or(1);
+        let bottom = adjusted_row + img_rows;
+        let right = i32::from(self.col) + img_cols;
+        bottom > 0
+            && adjusted_row < i32::from(pane_rows)
+            && right > 0
+            && i32::from(self.col) < i32::from(pane_cols)
     }
 
     /// clamps a graphic command's positioning to respect pane boundaries.
@@ -1984,6 +2094,157 @@ pub fn sixel_pixel_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
+/// rewrites a Sixel DCS so that only the left `max_cols` and top `max_rows`
+/// pixels remain, without decoding or re-quantizing the image.
+///
+/// this is a token-level truncation: trailing columns/bands are dropped, the
+/// last partial band is bit-masked, and the raster attributes are rewritten to
+/// the visible size. it is linear in the payload and preserves the app's
+/// palette, unlike a decode -> crop -> encode round trip, which costs hundreds
+/// of milliseconds for a large preview.
+fn truncate_sixel(
+    data: &[u8],
+    skip_top_bands: u32,
+    skip_left: u32,
+    max_cols: u32,
+    max_rows: u32,
+) -> Option<Vec<u8>> {
+    if max_cols == 0 || max_rows == 0 {
+        return None;
+    }
+    let start = sixel_payload_offset(data)?;
+    let body_end = data[start..]
+        .iter()
+        .position(|&b| b == 0x1b || b == 0x9c)
+        .map(|offset| start + offset)
+        .unwrap_or(data.len());
+    let body = &data[start..body_end];
+    let max_bands = max_rows.div_ceil(6);
+    let end_band = skip_top_bands + max_bands;
+    let mut out = Vec::with_capacity(data.len().min(64 * 1024));
+    out.extend_from_slice(&data[..start]);
+    let mut band: u32 = 0;
+    let mut x: u32 = 0;
+    let mut i = 0usize;
+    while i < body.len() && band < end_band {
+        match body[i] {
+            b'#' => {
+                out.push(b'#');
+                i += 1;
+                while i < body.len() && (body[i].is_ascii_digit() || body[i] == b';') {
+                    out.push(body[i]);
+                    i += 1;
+                }
+            }
+            b'"' => {
+                i += 1;
+                let mut params: Vec<u32> = vec![0];
+                while i < body.len() && (body[i].is_ascii_digit() || body[i] == b';') {
+                    if body[i] == b';' {
+                        params.push(0);
+                    } else if let Some(last) = params.last_mut() {
+                        *last = last
+                            .saturating_mul(10)
+                            .saturating_add(u32::from(body[i] - b'0'));
+                    }
+                    i += 1;
+                }
+                let pan = params.first().copied().unwrap_or(0);
+                let pad = params.get(1).copied().unwrap_or(0);
+                out.extend_from_slice(format!("\"{pan};{pad};{max_cols};{max_rows}").as_bytes());
+            }
+            b'!' => {
+                i += 1;
+                let mut count: u32 = 0;
+                let mut seen = false;
+                while i < body.len() && body[i].is_ascii_digit() {
+                    count = count
+                        .saturating_mul(10)
+                        .saturating_add(u32::from(body[i] - b'0'));
+                    seen = true;
+                    i += 1;
+                }
+                let Some(&c) = body.get(i) else { break };
+                if (0x3f..=0x7e).contains(&c) {
+                    let count = if seen { count.max(1) } else { 1 };
+                    let in_band = band >= skip_top_bands && band < end_band;
+                    if in_band {
+                        let vis_start = x.max(skip_left);
+                        let vis_end = (x + count).min(skip_left + max_cols);
+                        if vis_end > vis_start {
+                            let take = vis_end - vis_start;
+                            let ch = mask_sixel_bits(c, band - skip_top_bands, max_bands, max_rows);
+                            write_sixel_repeat(&mut out, take, ch);
+                        }
+                    }
+                    x = x.saturating_add(count);
+                    i += 1;
+                }
+            }
+            b'$' => {
+                out.push(b'$');
+                x = 0;
+                i += 1;
+            }
+            b'-' => {
+                if band >= skip_top_bands && band < end_band {
+                    out.push(b'-');
+                }
+                band = band.saturating_add(1);
+                x = 0;
+                i += 1;
+            }
+            0x3f..=0x7e => {
+                let in_band = band >= skip_top_bands && band < end_band;
+                if in_band && x >= skip_left && x < skip_left + max_cols {
+                    out.push(mask_sixel_bits(
+                        body[i],
+                        band - skip_top_bands,
+                        max_bands,
+                        max_rows,
+                    ));
+                }
+                x = x.saturating_add(1);
+                i += 1;
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    while out.ends_with(b"-") {
+        out.pop();
+    }
+    out.extend_from_slice(&data[body_end..]);
+    Some(out)
+}
+
+/// clears the pixels of the last visible band that fall below `max_rows`.
+fn mask_sixel_bits(c: u8, band: u32, max_bands: u32, max_rows: u32) -> u8 {
+    if band + 1 < max_bands {
+        return c;
+    }
+    let rows = max_rows.saturating_sub(band.saturating_mul(6)).min(6);
+    if rows == 0 {
+        return 0x3f;
+    }
+    if rows >= 6 {
+        return c;
+    }
+    let mask = (1u8 << rows) - 1;
+    0x3f + (c.wrapping_sub(0x3f) & mask)
+}
+
+fn write_sixel_repeat(out: &mut Vec<u8>, count: u32, c: u8) {
+    if count <= 1 {
+        out.push(c);
+    } else {
+        out.extend_from_slice(format!("!{count}").as_bytes());
+        out.push(c);
+    }
+}
+
 fn fit_pixel_size(
     pixel_width: u32,
     pixel_height: u32,
@@ -2061,10 +2322,39 @@ impl PaneGraphicsStore {
         // file as soon as the transmission is out, so the pixels have to be
         // kept to survive an ED2 repaint.
         cmd.read_transmitted_file();
-        // an image re-drawn at the same cell replaces the previous one. without
-        // this, every animation frame or preview refresh accumulates a full copy
-        // in the store and every later frame re-transmits all of them
-        if matches!(cmd.format, GraphicFormat::Sixel | GraphicFormat::Iterm2) {
+        // an image re-drawn replaces the previous one. without this, every
+        // animation frame or preview refresh accumulates a full copy in the
+        // store and every later frame re-transmits all of them.
+        //
+        // For Sixel (alternate screen): always drop ALL previous sixels on the
+        // same virtual screen. Alternate-screen apps like Yazi own the entire
+        // display; a new sixel at any position supersedes every earlier one.
+        // Without this, two successive images at slightly different cursor
+        // positions (row 0 vs row 1) both survive, causing visible pixel
+        // stacking on the outer terminal's framebuffer.
+        //
+        // For Sixel (primary screen): drop only the existing sixel at the same
+        // row/col. Primary screen may have multiple sixels at different anchors
+        // in the scrollback, and they must coexist.
+        //
+        // For iTerm2: same pane, same cell only (iTerm2 supports multiple
+        // positioned images and must not silently drop unrelated ones).
+        if cmd.format == GraphicFormat::Sixel {
+            if cmd.alternate_screen {
+                // alternate screen: new sixel wins, clear all previous ones
+                self.commands.retain(|existing| {
+                    !(existing.format == GraphicFormat::Sixel && existing.alternate_screen)
+                });
+            } else {
+                // primary screen: only replace same-position sixel
+                self.commands.retain(|existing| {
+                    !(existing.format == GraphicFormat::Sixel
+                        && !existing.alternate_screen
+                        && existing.row == cmd.row
+                        && existing.col == cmd.col)
+                });
+            }
+        } else if cmd.format == GraphicFormat::Iterm2 {
             self.commands.retain(|existing| {
                 !(existing.format == cmd.format
                     && existing.alternate_screen == cmd.alternate_screen
