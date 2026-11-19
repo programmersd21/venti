@@ -207,7 +207,7 @@ mit
 
 inspired by tmux, zellij, helix.
 
-built with ratatui, crossterm, serde, icy_sixel, ratatui-image.
+built with ratatui, crossterm, serde, icy_sixel.
 
 colors from catppuccin.
 

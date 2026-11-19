@@ -6,7 +6,7 @@ major architecture release: sixel and kitty graphics protocol (kgp) support, uni
 
 ### added
 
-- **pure-rust graphics pipeline**: powered by `icy_sixel` v0.7 and `ratatui-image` with zero c dependencies.
+- **pure-rust graphics pipeline**: powered by `icy_sixel` v0.7 and `image` with zero c dependencies.
 - **dual protocol pass-through**: transparent, high-performance forwarding for both sixel (`ESC P ... q ... ESC \`) and kitty graphics protocol apc (`ESC _G ... ESC \`) sequences.
 - **kitty unicode placeholders (`U+10EEEE`)**: images are anchored to virtual character cells with diacritics, keeping images locked to grid cells across splits, resizing, and scrolling.
 - **pty stream interceptor**: graphic escape sequences are stripped from incoming child pty streams before reaching `vt100::Parser`, eliminating terminal text corruption.
@@ -17,7 +17,7 @@ major architecture release: sixel and kitty graphics protocol (kgp) support, uni
 
 ### changed
 
-- updated `Cargo.toml` dependencies with pure-rust `icy_sixel`, `ratatui-image`, and `image` crates with minimal feature sets.
+- updated `Cargo.toml` dependencies with pure-rust `icy_sixel` and `image` crates with minimal feature sets.
 - streamlined documentation suite into clean, lowercase, structured guides across all core topics.
 - bumped version to `0.2.0`.
 
