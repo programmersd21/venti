@@ -16,5 +16,5 @@ fast, quiet terminal multiplexer for linux.
 
 - **linux native**: built exclusively for linux using nix syscalls and unix domain sockets.
 - **zero bloat**: written in pure rust with minimal dependencies, no c wrappers, and no heavyweight frameworks.
-- **graphics pipeline**: Sixel and Kitty graphics protocol support with Unicode placeholders (`U+10EEEE`); iTerm2 images are unsupported.
+- **graphics pipeline**: sixel and kitty graphics protocol support with unicode placeholders (`U+10EEEE`); iterm2 images are unsupported.
 - **rock-solid key handling**: alt-first keybindings avoid stealing critical ctrl-key shortcuts from child apps.

@@ -5,7 +5,7 @@
   <br><br>
   <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&logo=githubactions&logoColor=a6e3a1&label=build&color=a6e3a1&labelColor=313244" alt="build" /></a>
   <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&logo=rust&logoColor=cba6f7&color=cba6f7&labelColor=313244" alt="crates.io" /></a>
-  <a href="https://aur.archlinux.org/packages/venti-bin"><img src="https://img.shields.io/aur/version/venti-bin?style=for-the-badge&logo=archlinux&logoColor=89b4fa&color=89b4fa&labelColor=313244" alt="AUR version" /></a>
+  <a href="https://aur.archlinux.org/packages/venti-bin"><img src="https://img.shields.io/aur/version/venti-bin?style=for-the-badge&logo=archlinux&logoColor=89b4fa&color=89b4fa&labelColor=313244" alt="aur version" /></a>
   <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=f9e2af&color=f9e2af&labelColor=313244" alt="license" /></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=fab387&labelColor=313244" alt="rust" /></a>
   <a href="https://github.com/programmersd21/venti/issues"><img src="https://img.shields.io/github/issues/programmersd21/venti?style=for-the-badge&logo=github&logoColor=f38ba8&color=f38ba8&labelColor=313244" alt="issues" /></a>
@@ -20,15 +20,15 @@
 
 ## features
 
-- **Sixel graphics**: clipped and tracked with pane scrolling, powered by `icy_sixel`
-- **Kitty graphics protocol**: image transmission, placements, scrolling, and resize support
+- **sixel graphics**: clipped and tracked with pane scrolling, powered by `icy_sixel`
+- **kitty graphics protocol**: image transmission, placements, scrolling, and resize support
 - **multiple workspaces**: organize panes across independent workspace sets
 - **tiled layouts**: dwindle (default) or monocle, with configurable splits
 - **floating panes**: drag-and-drop, drag-resize corners
-- **four keybinding profiles**: beginner (mouse+f-keys), hypr (hjkl power set), vim (vi grammar), dev (editor/IDE ergonomics)
+- **four keybinding profiles**: beginner (mouse+f-keys), hypr (hjkl power set), vim (vi grammar), dev (editor/ide ergonomics)
 - **copy mode**: vim-like scrollback search and selection
 - **live settings**: edit 40+ options via f2, changes apply instantly
-- **bright ui**: centered dialogs, colorful CLI
+- **bright ui**: centered dialogs, colorful cli
 - **workspace tab context menu**: right-click a tab for rename / new / close, anchored at the click
 - **scroll indicator**: optional "↑12" marker in the pane title while scrolled back
 - **sidebar fold**: `shift+tab` folds the workspace sidebar away in every profile
@@ -36,7 +36,7 @@
 
 ## install
 
-### arch Linux
+### arch linux
 
 ```bash
 yay -S venti-bin
@@ -150,7 +150,7 @@ docs: `docs/configuration.md`
 ## design
 
 - **linux only**: vt100 terminal emulation via term-wm-vt100 (patched)
-- **graphics support**: Kitty graphics and Sixel are selected from the attached terminal's `TERM` and `TERM_PROGRAM` identity
+- **graphics support**: kitty graphics and sixel are selected from the attached terminal's `TERM` and `TERM_PROGRAM` identity
 - **fast**: event-driven, minimal allocations, diff-based rendering
 - **minimal deps**: ratatui, crossterm, serde, nix syscalls
 - **no ui framework overhead**: custom rendering for perfect pixel control
@@ -193,7 +193,7 @@ cargo clippy          # lint
 
 ## graphics
 
-Venti forwards Kitty graphics protocol and Sixel sequences, subject to the attached terminal's detected capabilities. iTerm2 image sequences are unsupported. See [graphics documentation](docs/graphics.md) for protocol scope and limitations.
+venti forwards kitty graphics protocol and sixel sequences, subject to the attached terminal's detected capabilities. iterm2 image sequences are unsupported. see [graphics documentation](docs/graphics.md) for protocol scope and limitations.
 
 ## contributing
 

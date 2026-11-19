@@ -36,6 +36,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+
       - name: check format
         run: cargo fmt --check
 

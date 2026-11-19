@@ -28,6 +28,12 @@ jobs:
       - name: install rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          cache-on-failure: true
+
       - name: test
         run: cargo test --locked
 

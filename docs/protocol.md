@@ -13,7 +13,7 @@ every message on the unix socket has a 4-byte little-endian length prefix follow
 +-----------------------------------+-----------------------------------+
 ```
 
-maximum payload size is 32 MiB (`MAX_FRAME_SIZE`). the decoder checks the length
+maximum payload size is 32 mib (`MAX_FRAME_SIZE`). the decoder checks the length
 before allocating payload storage and rejects oversized frames.
 
 ## handshake

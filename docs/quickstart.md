@@ -7,7 +7,7 @@ get started with venti in under two minutes.
 ### prerequisites
 - linux kernel 5.4+
 - rust toolchain (edition 2024 / rustc 1.85+)
-- terminal emulator; Kitty graphics works in `kitty`, `ghostty`, and `wezterm`; Sixel works in supported terminals such as `foot` and `konsole`
+- terminal emulator; kitty graphics works in `kitty`, `ghostty`, and `wezterm`; sixel works in supported terminals such as `foot` and `konsole`
 
 ### build from source
 ```bash

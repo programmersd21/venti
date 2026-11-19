@@ -23,11 +23,11 @@ major architecture release: sixel and kitty graphics protocol (kgp) support, uni
 
 ### fixed
 
-- detects the attached terminal from both `TERM` and `TERM_PROGRAM`, preserving Kitty and Sixel capabilities when `TERM` is generic.
-- follows alternate-screen grid scrolling when positioning graphics and drops Sixel placements when new text overwrites their cells.
-- keeps Kitty and Sixel graphics in the client update path across redraws and resize events.
-- preserves already-encoded Kitty payloads when re-chunking Chafa images.
-- forwards Kitty animation feature probes and chunked animation frames.
+- detects the attached terminal from both `TERM` and `TERM_PROGRAM`, preserving kitty and sixel capabilities when `TERM` is generic.
+- follows alternate-screen grid scrolling when positioning graphics and drops sixel placements when new text overwrites their cells.
+- keeps kitty and sixel graphics in the client update path across redraws and resize events.
+- preserves already-encoded kitty payloads when re-chunking chafa images.
+- forwards kitty animation feature probes and chunked animation frames.
 - schedules a final graphics repaint when pane resize animations finish.
 - fixed sixel image tearing and ghosting when navigating folders and previews in yazi.
 - fixed text cells corrupting underlying graphics layers by rendering graphics before text cells in `apply_update`.
