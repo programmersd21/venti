@@ -1,6 +1,6 @@
 # contributing to venti
 
-venti 0.1.0 | 2026-11-16 | linux only
+venti 0.2.0 | 2026-11-19 | linux only
 
 ## workflow
 
@@ -87,7 +87,7 @@ these won't be accepted:
 | layout | tiling, floating, workspace |
 | client | terminal i/o, rendering |
 | config | schema, validation |
-| graphics | sixel, kitty, iterm2 |
+| graphics | sixel, kitty |
 
 ## documentation
 

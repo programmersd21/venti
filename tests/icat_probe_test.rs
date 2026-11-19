@@ -16,16 +16,18 @@ fn answer_for(responder: &mut QueryResponder, bytes: &[u8]) -> Vec<u8> {
         }
     }
     let mut out = Vec::new();
-    responder.process_queries(
-        &plain,
-        &mut out,
-        Some(ScreenState {
-            cursor_row: 0,
-            cursor_col: 0,
-            rows: 24,
-            cols: 80,
-        }),
-    );
+    responder
+        .process_queries(
+            &plain,
+            &mut out,
+            Some(ScreenState {
+                cursor_row: 0,
+                cursor_col: 0,
+                rows: 24,
+                cols: 80,
+            }),
+        )
+        .expect("query response write");
     out
 }
 
@@ -87,12 +89,28 @@ fn icat_sharedmem_probe_is_answered() {
 fn icat_da1_query_sees_both_graphics_bits() {
     let mut responder = QueryResponder::for_outer_terminal("xterm-kitty", OuterGraphics::Kitty);
     let mut out = Vec::new();
-    responder.process_queries(b"\x1b[c", &mut out, None);
+    responder
+        .process_queries(b"\x1b[c", &mut out, None)
+        .expect("query response write");
     let da1 = String::from_utf8_lossy(&out);
     assert!(
         da1.contains("52") && da1.contains("22"),
         "DA1 must advertise Kitty graphics (52) and base (22), got: {da1}"
     );
+}
+
+#[test]
+fn kitty_animation_feature_probes_are_answered() {
+    let mut responder = QueryResponder::for_outer_terminal("xterm-kitty", OuterGraphics::Kitty);
+    for (id, action) in [(80, "f"), (81, "a"), (82, "c")] {
+        let query = format!("\x1b_Ga=q,i={id},e={action}\x1b\\");
+        let out = answer_for(&mut responder, query.as_bytes());
+        assert_eq!(
+            out,
+            format!("\x1b_Gi={id},e={action};OK\x1b\\").as_bytes(),
+            "Kitty should report its forwarded {action} action"
+        );
+    }
 }
 
 #[test]

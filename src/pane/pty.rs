@@ -93,9 +93,7 @@ pub fn spawn_pty_with_graphics(
         cmd.cwd(dir);
     }
 
-    // advertise graphics capabilities truthfully: TERM=xterm-kitty only when the
-    // outer (or the one behind tmux) speaks kitty graphics; TERM_PROGRAM=iTerm.app
-    // when it speaks iterm2's inline image protocol; otherwise xterm-256color.
+    // advertise graphics capabilities truthfully to child applications.
     // do NOT propagate KITTY_WINDOW_ID: that would make kitten icat pick
     // shared-memory transfer mode (can't cross multiplexer); without it kitten
     // falls back to stream mode which venti forwards.
@@ -219,6 +217,40 @@ mod tests {
 
         assert!(term_seen, "child did not receive TERM=foot");
         assert!(program_seen, "child did not receive TERM_PROGRAM=venti");
+        pty.child.wait().expect("reap environment probe");
+    }
+
+    #[test]
+    fn spawned_child_receives_kitty_identity_for_capability_detection() {
+        let mut pty = spawn_pty_with_graphics(
+            80,
+            24,
+            "/bin/sh -c env",
+            None,
+            "term-test",
+            1,
+            crate::util::outer_term::GraphicsSpawn::from_term("xterm-kitty"),
+        )
+        .expect("spawn environment probe");
+        let mut reader = BufReader::new(&mut pty.reader);
+        let mut line = String::new();
+        let mut term_seen = false;
+        let mut program_seen = false;
+
+        for _ in 0..256 {
+            line.clear();
+            if reader.read_line(&mut line).expect("read child environment") == 0 {
+                break;
+            }
+            term_seen |= line.trim_end() == "TERM=xterm-kitty";
+            program_seen |= line.trim_end() == "TERM_PROGRAM=kitty";
+            if term_seen && program_seen {
+                break;
+            }
+        }
+
+        assert!(term_seen, "child did not receive TERM=xterm-kitty");
+        assert!(program_seen, "child did not receive TERM_PROGRAM=kitty");
         pty.child.wait().expect("reap environment probe");
     }
 }

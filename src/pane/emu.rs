@@ -259,25 +259,65 @@ fn process_plain_tracking_clears(parser: &mut vt100::Parser, bytes: &[u8]) -> u8
     }
     cleared
 }
+
 /// how many grid rows a sixel with `pixel_height` occupies, given the cell height in pixels.
 fn sixel_rows(pixel_height: u32, cell_height: u32) -> u16 {
     let cell_height = u64::from(cell_height.max(1));
     u16::try_from(pixel_height.div_ceil(cell_height as u32).max(1)).unwrap_or(u16::MAX)
 }
 
-fn sixel_cols(pixel_width: u32, cell_width: u32) -> u16 {
-    let cell_width = u64::from(cell_width.max(1));
-    u16::try_from(pixel_width.div_ceil(cell_width as u32).max(1)).unwrap_or(u16::MAX)
+fn screen_row_hashes(parser: &vt100::Parser) -> Vec<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let (rows, cols) = parser.screen().size();
+    (0..rows)
+        .map(|row| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for col in 0..cols {
+                parser
+                    .screen()
+                    .cell(row, col)
+                    .map(|cell| cell.contents())
+                    .unwrap_or(" ")
+                    .hash(&mut hasher);
+            }
+            hasher.finish()
+        })
+        .collect()
+}
+
+fn detected_grid_scroll(previous: &[u64], current: &[u64]) -> i32 {
+    if previous.len() != current.len() || previous.is_empty() {
+        return 0;
+    }
+    let len = previous.len() as i32;
+    let mut best_shift = 0;
+    let mut best_matches = 0usize;
+    let mut unchanged_matches = 0usize;
+    for shift in -(len - 1)..len {
+        let matches = (0..len)
+            .filter(|&row| {
+                let old_row = row + shift;
+                old_row >= 0 && old_row < len && current[row as usize] == previous[old_row as usize]
+            })
+            .count();
+        if shift == 0 {
+            unchanged_matches = matches;
+        } else if matches > best_matches {
+            best_shift = shift;
+            best_matches = matches;
+        }
+    }
+    if best_matches > unchanged_matches && best_matches >= previous.len().min(2) {
+        best_shift
+    } else {
+        0
+    }
 }
 
 /// vt100 surgery for a sixel image, applied at the exact stream position of the
 /// image so the app-visible grid stays consistent with what the host terminal paints.
 ///
-/// - erases the rows covered by the image (from the image's left column) with a
-///   default-background fill, matching how sixel-capable terminals treat text
-///   under the image (foot/xterm erase it); without this, stale cells show
-///   through transparent pixels and overlapping repaints stack visually
-/// - restores the app's SGR state afterwards
 /// - places the cursor on the last row occupied by the image (DEC placement,
 ///   as implemented by foot and wezterm), and when the image crosses the bottom
 ///   margin, scrolls the page by the number of rows needed to fit the image
@@ -304,25 +344,9 @@ fn sixel_erase_and_advance(
     let scroll = anchor_row - desired_top;
     let last_row = desired_top + img_rows - 1;
 
-    let attrs = p.screen().attributes_formatted();
-    let (cell_w, _) = crate::util::outer_term::cell_pixel_size();
-    let img_cols = sixel_cols(pixel_size.0, cell_w);
-    let img_cols = img_cols.max(1);
-    let mut seq = Vec::with_capacity(attrs.len() + usize::from(img_rows) * 24 + 32);
-    // default-background erase; only the image's covered cells, not the
-    // rest of the line (which may hold text that must survive).
-    seq.extend_from_slice(b"\x1b[0m");
-    for r in desired_top..=last_row {
-        seq.extend_from_slice(format!("\x1b[{};{}H", r + 1, anchor_col + 1).as_bytes());
-        // erase covered characters using spaces with default bg/fg
-        seq.extend_from_slice(format!("\x1b[{}X", img_cols).as_bytes());
-        seq.extend(std::iter::repeat_n(b' ', usize::from(img_cols)));
-    }
-    seq.extend_from_slice(&attrs);
-    // DEC placement: cursor lands on the row containing the top pixel of the
-    // image's bottom band, at the image's left edge
-    seq.extend_from_slice(format!("\x1b[{};{}H", last_row + 1, anchor_col + 1).as_bytes());
-    p.process(&seq);
+    // keep the text grid intact: sixel pixels overlay cells, and blanking those
+    // cells here made transparent image areas erase TUI content on redraw.
+    p.process(format!("\x1b[{};{}H", last_row + 1, anchor_col + 1).as_bytes());
 
     // DECSDM (sixel scrolling mode): scroll the page so the image's bottom
     // edge fits. an LF at the bottom margin scrolls one row.
@@ -428,6 +452,8 @@ pub struct Pane {
     /// full repaint, otherwise a "clear" would resurrect the old sixel on
     /// the next redraw.
     pub screen_cleared: Arc<AtomicBool>,
+    /// monotonic rows scrolled by the child, including alternate-screen scrolls.
+    pub graphics_scrolls: Arc<std::sync::atomic::AtomicI64>,
     pub child_exited: Arc<AtomicBool>,
     pub exit_status: Arc<Mutex<Option<i32>>>,
     pub child_pid: Option<u32>,
@@ -557,9 +583,11 @@ impl Pane {
         let gfx_dirty = Arc::new(AtomicBool::new(false));
         let alt_exited = Arc::new(AtomicBool::new(false));
         let screen_cleared = Arc::new(AtomicBool::new(false));
+        let graphics_scrolls = Arc::new(std::sync::atomic::AtomicI64::new(0));
         let graphics_reader = Arc::clone(&graphics);
         let alt_exited_reader = Arc::clone(&alt_exited);
         let screen_cleared_reader = Arc::clone(&screen_cleared);
+        let graphics_scrolls_reader = Arc::clone(&graphics_scrolls);
         let gfx_dirty_reader = Arc::clone(&gfx_dirty);
         let spawn_ctx_clone = spawn_ctx_owned;
         let reader_thread = std::thread::spawn(move || {
@@ -573,7 +601,7 @@ impl Pane {
             let mut was_alt_screen = false;
             let mut cursor_mode_pending = Vec::new();
             // drain until eof so trailing child output is not lost if the waiter thread sees the exit first
-            loop {
+            'pty_reader: loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -597,6 +625,19 @@ impl Pane {
                                     // instead of the canonical ESC [ N ; M H; the bundled vt100
                                     // does not treat 'f' as a synonym, so rewrite it in place.
                                     normalize_csi_f_to_h(&mut plain);
+                                    let tracks_graphics = graphics_reader
+                                        .lock()
+                                        .map(|store| !store.active_commands().is_empty())
+                                        .unwrap_or(false);
+                                    let previous_alt_rows = tracks_graphics
+                                        .then(|| parser_reader.lock().ok())
+                                        .flatten()
+                                        .and_then(|parser| {
+                                            parser
+                                                .screen()
+                                                .alternate_screen()
+                                                .then(|| screen_row_hashes(&parser))
+                                        });
                                     let screen = parser_reader.lock().ok().map(|p| {
                                         let (row, col) = p.screen().cursor_position();
                                         let (rows, cols) = p.screen().size();
@@ -607,14 +648,41 @@ impl Pane {
                                             cols,
                                         }
                                     });
-                                    if let Some(screen) = screen
-                                        && let Ok(mut w) = pty_writer_clone.lock()
-                                    {
-                                        responder.process_queries(&plain, &mut **w, Some(screen));
+                                    if let Some(screen) = screen {
+                                        let Ok(mut w) = pty_writer_clone.lock() else {
+                                            tracing::error!(
+                                                "pane {} query response writer lock poisoned",
+                                                id.0
+                                            );
+                                            break 'pty_reader;
+                                        };
+                                        if let Err(error) = responder.process_queries(
+                                            &plain,
+                                            &mut **w,
+                                            Some(screen),
+                                        ) {
+                                            tracing::error!(
+                                                "pane {} failed to write terminal query response: {error}",
+                                                id.0
+                                            );
+                                            break 'pty_reader;
+                                        }
                                     }
                                     let cleared = if let Ok(mut p) = parser_reader.lock() {
                                         let cleared = process_plain_tracking_clears(&mut p, &plain);
                                         let now_alt = p.screen().alternate_screen();
+                                        if let Some(previous) = previous_alt_rows.as_deref()
+                                            && now_alt
+                                        {
+                                            let shift = detected_grid_scroll(
+                                                previous,
+                                                &screen_row_hashes(&p),
+                                            );
+                                            if shift != 0 {
+                                                graphics_scrolls_reader
+                                                    .fetch_add(i64::from(shift), Ordering::AcqRel);
+                                            }
+                                        }
                                         if was_alt_screen && !now_alt {
                                             alt_exited_reader.store(true, Ordering::Release);
                                         }
@@ -735,6 +803,7 @@ impl Pane {
             mouse_reporting,
             alt_exited,
             screen_cleared,
+            graphics_scrolls,
             child_exited,
             exit_status,
             child_pid,
@@ -842,7 +911,10 @@ impl Pane {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_csi_f_to_h, reserve_input_bytes, sixel_erase_and_advance, sixel_rows};
+    use super::{
+        detected_grid_scroll, normalize_csi_f_to_h, reserve_input_bytes, sixel_erase_and_advance,
+        sixel_rows,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -872,14 +944,14 @@ mod tests {
     }
 
     #[test]
-    fn sixel_erase_and_advance_blanks_covered_rows() {
+    fn sixel_advance_preserves_text_under_the_image() {
         let mut parser = vt100::Parser::new(10, 40, 0);
         parser.process(b"\x1b[2;1Hjunk");
         sixel_erase_and_advance(&mut parser, (64, 20), 1, 0);
         let contents = parser.screen().contents();
         assert!(
-            !contents.contains("junk"),
-            "covered row was blanked: {contents:?}"
+            contents.contains("junk"),
+            "text under the image must remain in the grid: {contents:?}"
         );
     }
 
@@ -901,7 +973,7 @@ mod tests {
         // page scrolls up by two and the cursor stays on the bottom row
         assert_eq!(parser.screen().cursor_position().0, 4);
         let contents = parser.screen().contents();
-        assert!(!contents.contains("junk"));
+        assert!(contents.contains("junk"));
     }
 
     #[test]
@@ -944,6 +1016,13 @@ mod tests {
             vt100::MouseProtocolMode::None
         );
         assert!(!parser.screen().bracketed_paste());
+    }
+
+    #[test]
+    fn detects_grid_scrolls_in_both_directions() {
+        assert_eq!(detected_grid_scroll(&[1, 2, 3, 4], &[2, 3, 4, 5]), 1);
+        assert_eq!(detected_grid_scroll(&[1, 2, 3, 4], &[9, 1, 2, 3]), -1);
+        assert_eq!(detected_grid_scroll(&[1, 2, 3, 4], &[1, 2, 3, 5]), 0);
     }
 
     #[test]

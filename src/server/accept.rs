@@ -186,7 +186,7 @@ fn handle_client(
         );
     }
 
-    let (cols, rows, term, cell_pixel) = match hello {
+    let (cols, rows, term, term_program, cell_pixel) = match hello {
         ClientMsg::Hello(hello) => {
             if hello.protocol != PROTOCOL_VERSION {
                 let _ = write_msg(
@@ -197,7 +197,18 @@ fn handle_client(
                 );
                 return;
             }
-            (hello.size.0, hello.size.1, hello.term, hello.cell_pixel)
+            let term_program = hello
+                .env
+                .into_iter()
+                .find(|(key, _)| key == "TERM_PROGRAM")
+                .map(|(_, value)| value);
+            (
+                hello.size.0,
+                hello.size.1,
+                hello.term,
+                term_program,
+                hello.cell_pixel,
+            )
         }
         _ => return,
     };
@@ -224,6 +235,7 @@ fn handle_client(
             cols,
             rows,
             term,
+            term_program,
             cell_pixel,
         },
     ) {

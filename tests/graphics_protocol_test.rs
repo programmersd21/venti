@@ -60,6 +60,52 @@ fn test_chunked_accumulation() {
 }
 
 #[test]
+fn chunked_kitty_animation_frames_keep_the_base_image_id() {
+    let mut parser = GraphicsParser::new();
+    let mut store = PaneGraphicsStore::new();
+    let base = parser
+        .feed(b"\x1b_Ga=T,f=32,s=1,v=1,i=42;AAAA\x1b\\", 0, 0)
+        .remove(0);
+    store.push(base);
+    let mapped_id = store.active_commands()[0]
+        .kitty_metadata
+        .as_ref()
+        .unwrap()
+        .i
+        .unwrap();
+
+    assert!(
+        parser
+            .split(b"\x1b_Ga=f,f=32,s=1,v=1,i=42,z=100,m=1;BBBB\x1b\\")
+            .is_empty()
+    );
+    let frame = parser.feed(b"\x1b_Gm=0;CCCC\x1b\\", 0, 0).remove(0);
+    assert_eq!(
+        frame.kitty_metadata.as_ref().unwrap().a.as_deref(),
+        Some("f")
+    );
+    assert_eq!(frame.kitty_metadata.as_ref().unwrap().z, Some(100));
+    store.push(frame);
+
+    let frame = &store.active_commands()[1];
+    let metadata = frame.kitty_metadata.as_ref().unwrap();
+    assert_eq!(metadata.i, Some(mapped_id));
+    assert_eq!(metadata.a.as_deref(), Some("f"));
+    assert!(String::from_utf8_lossy(&frame.emission_payload()).contains("a=f"));
+
+    let control = parser.feed(b"\x1b_Ga=a,i=42,s=3,v=1\x1b\\", 0, 0).remove(0);
+    store.push(control);
+    assert_eq!(
+        store.active_commands()[2]
+            .kitty_metadata
+            .as_ref()
+            .unwrap()
+            .i,
+        Some(mapped_id)
+    );
+}
+
+#[test]
 fn interleaved_kitty_command_aborts_incomplete_transfer() {
     let mut parser = GraphicsParser::new();
     assert!(

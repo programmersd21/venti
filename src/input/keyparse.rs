@@ -551,13 +551,26 @@ impl KeyParser {
 
     fn parse_kitty_keyboard(&self, params: &str) -> Option<Key> {
         let parts: Vec<&str> = params.split(';').collect();
-        let codepoint = parts[0].parse::<u32>().ok()?;
+        let codepoint = parts[0].split(':').next()?.parse::<u32>().ok()?;
 
         let modifiers = if parts.len() > 1 {
             parse_xterm_modifier(parts[1].split(':').next()?)
         } else {
             Modifiers::NONE
         };
+
+        let event_type = if parts.len() > 1 {
+            parts[1]
+                .split(':')
+                .nth(1)
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        if event_type == 3 {
+            return None;
+        }
 
         key_from_codepoint(codepoint, modifiers)
     }

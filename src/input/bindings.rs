@@ -75,8 +75,9 @@ impl KeyBindings {
     /// f keys always drive venti. alt keys drive venti too; applications
     /// receive alt only for combos listed in `input.passthrough`.
     ///
-    /// fallback: if an alt+shift combination does not match, retry with just alt.
-    /// this compensates for host terminals that strip shift from alt-modified keys.
+    /// matching is exact: an alt+shift chord never falls back to its alt-only
+    /// binding, so unbound shifted chords pass through to the application
+    /// instead of triggering an unrelated command.
     pub fn find(&self, mode: InputMode, key: &Key) -> Option<&Command> {
         if self.disabled.contains(key) {
             return None;
@@ -84,28 +85,12 @@ impl KeyBindings {
         if mode == InputMode::Normal && self.passthrough.contains(key) {
             return None;
         }
-        
+
         // try exact match first
         if let Some(cmd) = self.bindings.get(&(mode, key.clone())) {
             return Some(cmd);
         }
-        
-        // fallback: if alt+shift, try alt without shift
-        if key.modifiers.alt && key.modifiers.shift && !key.modifiers.ctrl && !key.modifiers.super_key {
-            let fallback_key = Key::new(
-                key.code.clone(),
-                Modifiers {
-                    ctrl: false,
-                    alt: true,
-                    shift: false,
-                    super_key: false,
-                },
-            );
-            if let Some(cmd) = self.bindings.get(&(mode, fallback_key)) {
-                return Some(cmd);
-            }
-        }
-        
+
         None
     }
 

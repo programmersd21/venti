@@ -1,4 +1,4 @@
-.TH venti 1 "2026-11-16" "venti 0.1.0" "user commands"
+.TH venti 1 "2026-11-19" "venti 0.2.0" "user commands"
 .SH name
 venti \- terminal multiplexer
 
@@ -45,11 +45,9 @@ layout persists on restart.
 
 mouse: click, drag, wheel. f-keys everywhere.
 
-terminal graphics (sixel, kitty, iterm2) are experimental and may be
-unreliable across terminal emulators, particularly on resize, scroll and
-layout changes. graphics is on by default; set graphics = false in
+terminal graphics (sixel and kitty) depend on the attached terminal's
+capabilities. iTerm2 image sequences are unsupported. graphics is on by default; set graphics = false in
 ~/.config/venti/config.toml if images glitch, or turn it off from f2 -> graphics.
-venti doctor prints the same reminder.
 
 .SH commands
 .TP

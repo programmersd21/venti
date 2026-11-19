@@ -365,7 +365,7 @@ shell = ""
 scrollback = 10000
 # whether to synchronize terminal copy events via osc 52 escape sequences
 osc52 = true
-# forward sixel/kitty/iterm2 graphics from panes to clients.
+# forward sixel/kitty graphics from panes to clients.
 # terminal graphics support is experimental: an image can land in the wrong
 # place or leave pixels behind after a repaint. off by default; set true to
 # try it, and false again if images misbehave.

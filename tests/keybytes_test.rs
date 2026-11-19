@@ -12,6 +12,31 @@ fn encodes_printable_and_control_keys() {
 }
 
 #[test]
+fn encodes_shifted_printable_keys_with_their_legacy_glyph() {
+    let alt_shift = Modifiers {
+        ctrl: false,
+        alt: true,
+        shift: true,
+        super_key: false,
+    };
+    let shift = Modifiers {
+        ctrl: false,
+        alt: false,
+        shift: true,
+        super_key: false,
+    };
+
+    assert_eq!(Key::new(KeyCode::Char('1'), shift).to_bytes(), b"!");
+    assert_eq!(Key::new(KeyCode::Char('1'), alt_shift).to_bytes(), b"\x1b!");
+    assert_eq!(Key::new(KeyCode::Char('9'), alt_shift).to_bytes(), b"\x1b(");
+    assert_eq!(Key::new(KeyCode::Char(','), alt_shift).to_bytes(), b"\x1b<");
+    assert_eq!(Key::new(KeyCode::Char('.'), alt_shift).to_bytes(), b"\x1b>");
+    assert_eq!(Key::new(KeyCode::Char('['), alt_shift).to_bytes(), b"\x1b{");
+    assert_eq!(Key::new(KeyCode::Char(';'), shift).to_bytes(), b":");
+    assert_eq!(Key::new(KeyCode::Char('h'), alt_shift).to_bytes(), b"\x1bH");
+}
+
+#[test]
 fn encodes_cursor_and_editing_keys() {
     assert_eq!(Key::plain(KeyCode::Up).to_bytes(), b"\x1b[A");
     assert_eq!(Key::plain(KeyCode::Down).to_bytes(), b"\x1b[B");

@@ -5,7 +5,6 @@
 //! - kitty graphics protocol: `APC _G <control-data> ; <payload> ST` (or `ESC _ G ... ESC \` / BEL)
 //!   implements full protocol including: chunked transmission (m key), image caching (i key),
 //!   placement commands (a=p/T/d/q), metadata parsing, and feature queries (e key)
-//! - iterm2 inline images: `OSC 1337 ; File = ... ST` / BEL
 //!
 //! plain (non-graphics) byte spans are surfaced separately so callers can feed
 //! them to the vt100 parser in order, keeping the emulator and the graphics
@@ -221,7 +220,6 @@ impl std::fmt::Display for KittyControlData {
 pub enum GraphicFormat {
     Sixel,
     Kitty,
-    Iterm2,
 }
 
 /// a segment of the pane byte stream: either bytes for the vt100 parser, or a
@@ -243,7 +241,6 @@ pub struct KittyChunkBuffer {
     pub payload: Vec<u8>,
 }
 
-/// cached cropped sixel payload for the last viewport it was rendered into.
 /// placement and raw byte command of a graphic sequence.
 #[derive(Debug, Clone)]
 pub struct GraphicCommand {
@@ -268,12 +265,12 @@ pub struct GraphicCommand {
     /// bytes to re-place the image after its pixels were transmitted once.
     /// for kitty images with a known `i=` id this is an a=p placement command
     /// referencing the stored pixels, so the terminal re-draws them without
-    /// the app re-sending its payload. none for sixel/iterm2 and anonymous
+    /// the app re-sending its payload. none for sixel and anonymous
     /// kitty images, whose stores keep no image id to reference.
     pub reemit: Option<Vec<u8>>,
     /// pixel size for sixel images, parsed from raster attributes (`"Pan;Pad;Ph;Pv`)
     /// or counted from the data (one pixel per column, six pixels per band).
-    /// none for kitty/iterm2 and for sixels whose size cannot be determined.
+    /// none for kitty and for sixels whose size cannot be determined.
     pub pixel_size: Option<(u32, u32)>,
 }
 
@@ -492,7 +489,7 @@ impl GraphicCommand {
         {
             let mut control = metadata.clone();
             control.m = None;
-            kitty_chunked_apc(&control, payload)
+            kitty_chunked_encoded_apc(&control, payload)
         } else {
             self.data.clone()
         };
@@ -546,7 +543,7 @@ impl GraphicCommand {
         if !matches!(medium, "f" | "s" | "t") {
             return None;
         }
-        if !matches!(metadata.a.as_deref(), Some("t") | Some("T")) {
+        if !matches!(metadata.a.as_deref(), Some("t") | Some("T") | Some("f")) {
             return None;
         }
         // the payload of a file transmission is the base64 encoded path
@@ -584,7 +581,13 @@ impl GraphicCommand {
         // first frame would be blank. with the pixels inline the first frame
         // already carries the image.
         let mut control = KittyControlData {
-            a: Some("T".to_string()),
+            a: Some(
+                metadata
+                    .a
+                    .clone()
+                    .filter(|action| action == "f")
+                    .unwrap_or_else(|| "T".to_string()),
+            ),
             f: metadata.f,
             i: metadata.i,
             p: metadata.p,
@@ -612,11 +615,17 @@ impl GraphicCommand {
     pub fn retransmit_with_cached_bytes(&self) -> Option<Vec<u8>> {
         let bytes = self.file_bytes.as_ref()?;
         let metadata = self.kitty_metadata.as_ref()?;
-        if !matches!(metadata.a.as_deref(), Some("t") | Some("T")) {
+        if !matches!(metadata.a.as_deref(), Some("t") | Some("T") | Some("f")) {
             return None;
         }
         let mut control = KittyControlData {
-            a: Some("T".to_string()),
+            a: Some(
+                metadata
+                    .a
+                    .clone()
+                    .filter(|action| action == "f")
+                    .unwrap_or_else(|| "T".to_string()),
+            ),
             f: metadata.f,
             i: metadata.i,
             p: metadata.p,
@@ -762,7 +771,7 @@ impl GraphicCommand {
         if metadata.U == Some(1) {
             return;
         }
-        if matches!(metadata.a.as_deref(), Some("d" | "q" | "t")) {
+        if !matches!(metadata.a.as_deref(), Some("T" | "p")) {
             return;
         }
         // preserve native-size placements. Adding a c/r box here can upscale a
@@ -877,6 +886,8 @@ impl GraphicCommand {
         Some((data, vc, vr))
     }
 
+    /// returns true when any part of this Sixel placement overlaps the visible pane area.
+    /// used to decide whether a scroll requires an ED2 repaint.
     pub fn sixel_visible_in_pane(
         &self,
         pane_cols: u16,
@@ -976,7 +987,10 @@ pub fn kitty_apc(control: &KittyControlData) -> Vec<u8> {
 pub fn kitty_chunked_apc(control: &KittyControlData, payload: &[u8]) -> Vec<u8> {
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
-    let encoded = encoded.as_bytes();
+    kitty_chunked_encoded_apc(control, encoded.as_bytes())
+}
+
+fn kitty_chunked_encoded_apc(control: &KittyControlData, encoded: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(encoded.len() + encoded.len() / 4096 * 24 + 32);
     let mut first = true;
     let mut offset = 0usize;
@@ -1034,15 +1048,15 @@ enum State {
     Ground,
     /// saw ESC P; collecting dcs params and final byte into `seq`.
     DcsParams,
-    /// probing literal "1337;File" after ESC ] to recognize iterm2 images.
-    Osc1337,
+    /// probing an OSC prefix after ESC ].
+    Osc,
     /// collecting a complete graphic sequence into `seq`.
     Graphics(GraphicFormat),
     /// dropping the remainder of an oversized sequence through its terminator.
     DiscardingGraphic(GraphicFormat, bool),
 }
 
-/// stateful parser that extracts sixel, kitty, and iterm2 graphic sequences from raw pty byte streams.
+/// stateful parser that extracts sixel and kitty graphic sequences from raw pty byte streams.
 #[derive(Debug)]
 pub struct GraphicsParser {
     plain: Vec<u8>,
@@ -1082,7 +1096,7 @@ impl GraphicsParser {
             match self.state {
                 State::Ground => self.ground(b, &mut segments),
                 State::DcsParams => self.dcs_params(b),
-                State::Osc1337 => self.osc1337(b, &mut segments),
+                State::Osc => self.osc(b),
                 State::Graphics(kind) => self.collect(b, kind, &mut segments),
                 State::DiscardingGraphic(kind, previous_escape) => {
                     self.discard_graphic_byte(b, kind, previous_escape)
@@ -1137,7 +1151,7 @@ impl GraphicsParser {
                 self.flush_plain(segments);
                 self.seq.clear();
                 self.seq.push(b);
-                self.state = State::Osc1337;
+                self.state = State::Osc;
             }
             0x9f => {
                 self.flush_plain(segments);
@@ -1162,7 +1176,7 @@ impl GraphicsParser {
     }
 
     /// after ESC we must distinguish DCS (params .. final), APC _G (kitty),
-    /// and OSC 1337;File (iterm2). seq[0] == 0x1b, and seq holds what we
+    /// seq[0] == 0x1b, and seq holds what we
     /// have seen so far.
     fn dcs_params(&mut self, b: u8) {
         // recall: after ESC, the first meaningful byte decides the kind.
@@ -1220,9 +1234,9 @@ impl GraphicsParser {
                     self.state = State::Graphics(GraphicFormat::Kitty);
                 }
                 (Some(&b']'), b'1') => {
-                    // possible iterm2: probe "1337;File" starting at '1'
+                    // hold OSC bytes until their terminator.
                     self.seq.push(b);
-                    self.state = State::Osc1337;
+                    self.state = State::Osc;
                 }
                 _ => {
                     // not a graphics introducer: hand bytes back to plain.
@@ -1270,33 +1284,17 @@ impl GraphicsParser {
         self.state = State::Ground;
     }
 
-    /// probing the `1337;File*` family inside an OSC after ESC ]. covers the
-    /// single-shot `File=` and the chunked `MultipartFile=`/`FilePart=`/`FileEnd`
-    /// commands, which carry no terminator distinguishing them at this layer.
-    fn osc1337(&mut self, b: u8, segments: &mut Vec<Segment>) {
+    /// forwards unsupported OSC strings unchanged.
+    fn osc(&mut self, b: u8) {
         self.seq.push(b);
-        const CANDIDATES: &[&[u8]] = &[b"1337;File", b"1337;MultipartFile"];
-        let body_start = if self.seq.first() == Some(&0x9d) {
-            1
-        } else {
-            2
-        };
-        let body = &self.seq[body_start..];
-        for cand in CANDIDATES {
-            if body.len() <= cand.len() && cand.starts_with(body) {
-                self.state = if body.len() == cand.len() {
-                    State::Graphics(GraphicFormat::Iterm2)
-                } else {
-                    State::Osc1337
-                };
-                return;
-            }
+        if self.seq.ends_with(&[0x07])
+            || self.seq.ends_with(b"\x1b\\")
+            || self.seq.ends_with(&[0x9c])
+            || self.seq.len() > MAX_GRAPHIC_SEQ
+        {
+            self.flush_seq_to_plain();
+            self.state = State::Ground;
         }
-        // not iterm2: dump accumulated bytes as plain and reprocess this byte.
-        self.seq.pop();
-        self.flush_seq_to_plain();
-        self.state = State::Ground;
-        self.ground(b, segments);
     }
 
     /// collecting a full graphic sequence until its terminator.
@@ -1318,7 +1316,7 @@ impl GraphicsParser {
             tracing::warn!("graphic sequence exceeded {MAX_GRAPHIC_SEQ} bytes; dropping");
             let terminated = self.seq.ends_with(b"\x1b\\")
                 || self.seq.ends_with(&[0x9c])
-                || (kind != GraphicFormat::Sixel && self.seq.ends_with(&[0x07]));
+                || (kind == GraphicFormat::Kitty && self.seq.ends_with(&[0x07]));
             let previous_escape = b == 0x1b;
             self.seq.clear();
             self.kitty_chunk = None; // Also clear any in-flight Kitty chunks
@@ -1332,7 +1330,7 @@ impl GraphicsParser {
 
         let complete = match kind {
             GraphicFormat::Sixel => self.seq.ends_with(b"\x1b\\") || self.seq.ends_with(&[0x9c]),
-            GraphicFormat::Kitty | GraphicFormat::Iterm2 => {
+            GraphicFormat::Kitty => {
                 self.seq.ends_with(b"\x1b\\")
                     || self.seq.ends_with(&[0x9c])
                     || self.seq.ends_with(b"\x07")
@@ -1347,7 +1345,6 @@ impl GraphicsParser {
         match kind {
             GraphicFormat::Kitty => self.handle_kitty_sequence(segments),
             GraphicFormat::Sixel => self.handle_sixel_sequence(segments),
-            GraphicFormat::Iterm2 => self.handle_iterm2_sequence(segments),
         }
 
         self.seq.clear();
@@ -1439,7 +1436,10 @@ impl GraphicsParser {
         // bytes as the image's final chunk.
         self.kitty_chunk = None;
         if let Some(marker) = control.m {
-            if !matches!(control.a.as_deref(), None | Some("t") | Some("T")) {
+            if !matches!(
+                control.a.as_deref(),
+                None | Some("t") | Some("T") | Some("f")
+            ) {
                 return;
             }
             if marker == 0 {
@@ -1486,10 +1486,7 @@ impl GraphicsParser {
                 control.i = Some(next_image_id());
             }
             if control.p.is_none()
-                && matches!(
-                    control.a.as_deref(),
-                    Some("T") | Some("t") | Some("p") | Some("A") | Some("a")
-                )
+                && matches!(control.a.as_deref(), Some("T") | Some("t") | Some("p"))
             {
                 control.p = Some(next_placement_id());
             }
@@ -1547,24 +1544,6 @@ impl GraphicsParser {
             kitty_metadata: None,
             reemit: None,
             pixel_size,
-            file_bytes: None,
-        })));
-    }
-
-    /// handle iterm2 sequence (simpler, no chunking)
-    fn handle_iterm2_sequence(&mut self, segments: &mut Vec<Segment>) {
-        let data = std::mem::take(&mut self.seq);
-        self.flush_plain(segments);
-        segments.push(Segment::Graphic(Box::new(GraphicCommand {
-            format: GraphicFormat::Iterm2,
-            seq: 0,
-            row: 0,
-            col: 0,
-            alternate_screen: false,
-            data,
-            kitty_metadata: None,
-            reemit: None,
-            pixel_size: None,
             file_bytes: None,
         })));
     }
@@ -2326,40 +2305,32 @@ impl PaneGraphicsStore {
         // animation frame or preview refresh accumulates a full copy in the
         // store and every later frame re-transmits all of them.
         //
-        // For Sixel (alternate screen): always drop ALL previous sixels on the
-        // same virtual screen. Alternate-screen apps like Yazi own the entire
-        // display; a new sixel at any position supersedes every earlier one.
-        // Without this, two successive images at slightly different cursor
-        // positions (row 0 vs row 1) both survive, causing visible pixel
-        // stacking on the outer terminal's framebuffer.
-        //
-        // For Sixel (primary screen): drop only the existing sixel at the same
-        // row/col. Primary screen may have multiple sixels at different anchors
-        // in the scrollback, and they must coexist.
-        //
-        // For iTerm2: same pane, same cell only (iTerm2 supports multiple
-        // positioned images and must not silently drop unrelated ones).
+        // sixel has no delete command, so only replace images whose pixel
+        // rectangles overlap. Independent images on one screen must coexist.
         if cmd.format == GraphicFormat::Sixel {
-            if cmd.alternate_screen {
-                // alternate screen: new sixel wins, clear all previous ones
-                self.commands.retain(|existing| {
-                    !(existing.format == GraphicFormat::Sixel && existing.alternate_screen)
-                });
-            } else {
-                // primary screen: only replace same-position sixel
-                self.commands.retain(|existing| {
-                    !(existing.format == GraphicFormat::Sixel
-                        && !existing.alternate_screen
-                        && existing.row == cmd.row
-                        && existing.col == cmd.col)
-                });
-            }
-        } else if cmd.format == GraphicFormat::Iterm2 {
+            let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
+            let cell_w = cell_w.max(1);
+            let cell_h = cell_h.max(1);
+            let new_size = cmd.pixel_size.unwrap_or((1, 1));
+            let new_left = i64::from(cmd.col) * i64::from(cell_w);
+            let new_top = i64::from(cmd.row) * i64::from(cell_h);
+            let new_right = new_left + i64::from(new_size.0);
+            let new_bottom = new_top + i64::from(new_size.1);
             self.commands.retain(|existing| {
-                !(existing.format == cmd.format
-                    && existing.alternate_screen == cmd.alternate_screen
-                    && existing.row == cmd.row
-                    && existing.col == cmd.col)
+                if existing.format != GraphicFormat::Sixel
+                    || existing.alternate_screen != cmd.alternate_screen
+                {
+                    return true;
+                }
+                let old_size = existing.pixel_size.unwrap_or((1, 1));
+                let old_left = i64::from(existing.col) * i64::from(cell_w);
+                let old_top = i64::from(existing.row) * i64::from(cell_h);
+                let old_right = old_left + i64::from(old_size.0);
+                let old_bottom = old_top + i64::from(old_size.1);
+                new_left >= old_right
+                    || new_right <= old_left
+                    || new_top >= old_bottom
+                    || old_top >= new_bottom
             });
         }
         if cmd.format == GraphicFormat::Kitty
@@ -2383,7 +2354,8 @@ impl PaneGraphicsStore {
                 // kitty ids are shared by the outer terminal across all panes.
                 // give each transmitted image a daemon-wide id so pane-local
                 // ids cannot collide during deletes or placements.
-                let is_transmit = matches!(metadata.a.as_deref(), Some("t") | Some("T"));
+                let is_transmit =
+                    matches!(metadata.a.as_deref(), Some("t") | Some("T") | Some("f"));
                 let mapped = if is_transmit {
                     next_image_id()
                 } else {
@@ -2417,7 +2389,13 @@ impl PaneGraphicsStore {
                 && let Some(bytes) = cmd.file_bytes.clone()
             {
                 let mut control = KittyControlData {
-                    a: Some("T".to_string()),
+                    a: Some(
+                        metadata
+                            .a
+                            .clone()
+                            .filter(|action| action == "f")
+                            .unwrap_or_else(|| "T".to_string()),
+                    ),
                     f: metadata.f,
                     s: metadata.s,
                     v: metadata.v,
@@ -2436,7 +2414,7 @@ impl PaneGraphicsStore {
                 }
                 cmd.data = kitty_chunked_apc(&control, &bytes);
                 metadata.t = Some("d".to_string());
-                metadata.a = Some("T".to_string());
+                metadata.a = control.a.clone();
             }
 
             // every transmit/placement needs a re-place payload: the host
@@ -2661,10 +2639,7 @@ impl PaneGraphicsStore {
             .collect();
         self.commands.retain(|command| {
             command.alternate_screen != alternate_screen
-                || !matches!(
-                    command.format,
-                    GraphicFormat::Kitty | GraphicFormat::Sixel | GraphicFormat::Iterm2
-                )
+                || !matches!(command.format, GraphicFormat::Kitty | GraphicFormat::Sixel)
         });
         for id in image_ids {
             let control = KittyControlData {
@@ -2883,5 +2858,45 @@ mod placement_tests {
     fn crop_placement_returns_none_when_fully_contained() {
         let cmd = clipped_command(3, 40);
         assert_eq!(cmd.crop_placement(20, 20, 0), None);
+    }
+
+    #[test]
+    fn sixel_replacement_keeps_other_images_on_both_screens() {
+        let mut store = PaneGraphicsStore::new();
+        for (row, col, alternate_screen) in [(1, 1, false), (3, 1, false), (1, 1, true)] {
+            store.push(GraphicCommand {
+                format: GraphicFormat::Sixel,
+                seq: 0,
+                row,
+                col,
+                alternate_screen,
+                data: b"\x1bPq~\x1b\\".to_vec(),
+                file_bytes: None,
+                kitty_metadata: None,
+                reemit: None,
+                pixel_size: Some((20, 20)),
+            });
+        }
+
+        store.push(GraphicCommand {
+            format: GraphicFormat::Sixel,
+            seq: 0,
+            row: 1,
+            col: 1,
+            alternate_screen: false,
+            data: b"\x1bPqnew\x1b\\".to_vec(),
+            file_bytes: None,
+            kitty_metadata: None,
+            reemit: None,
+            pixel_size: Some((20, 20)),
+        });
+        assert_eq!(store.active_commands().len(), 3);
+        assert!(store.active_commands().iter().any(|cmd| cmd.row == 3));
+        assert!(
+            store
+                .active_commands()
+                .iter()
+                .any(|cmd| cmd.alternate_screen)
+        );
     }
 }

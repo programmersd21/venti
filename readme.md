@@ -5,6 +5,7 @@
   <br><br>
   <a href="https://github.com/programmersd21/venti/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/programmersd21/venti/ci.yml?style=for-the-badge&logo=githubactions&logoColor=a6e3a1&label=build&color=a6e3a1&labelColor=313244" alt="build" /></a>
   <a href="https://crates.io/crates/venti"><img src="https://img.shields.io/crates/v/venti?style=for-the-badge&logo=rust&logoColor=cba6f7&color=cba6f7&labelColor=313244" alt="crates.io" /></a>
+  <a href="https://aur.archlinux.org/packages/venti-bin"><img src="https://img.shields.io/aur/version/venti-bin?style=for-the-badge&logo=archlinux&logoColor=89b4fa&color=89b4fa&labelColor=313244" alt="AUR version" /></a>
   <a href="https://github.com/programmersd21/venti/blob/main/license"><img src="https://img.shields.io/github/license/programmersd21/venti?style=for-the-badge&logo=opensourceinitiative&logoColor=f9e2af&color=f9e2af&labelColor=313244" alt="license" /></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024-fab387?style=for-the-badge&logo=rust&logoColor=fab387&labelColor=313244" alt="rust" /></a>
   <a href="https://github.com/programmersd21/venti/issues"><img src="https://img.shields.io/github/issues/programmersd21/venti?style=for-the-badge&logo=github&logoColor=f38ba8&color=f38ba8&labelColor=313244" alt="issues" /></a>
@@ -19,7 +20,8 @@
 
 ## features
 
-- **high-performance, pure-Rust Sixel graphics**: powered by `icy_sixel` & `ratatui-image` (validated on foot & Wayland environments)
+- **Sixel graphics**: clipped and tracked with pane scrolling, powered by `icy_sixel`
+- **Kitty graphics protocol**: image transmission, placements, scrolling, and resize support
 - **multiple workspaces**: organize panes across independent workspace sets
 - **tiled layouts**: dwindle (default) or monocle, with configurable splits
 - **floating panes**: drag-and-drop, drag-resize corners
@@ -33,6 +35,16 @@
 - **fast**: event-driven, diff-based updates, minimal cpu
 
 ## install
+
+### arch Linux
+
+```bash
+yay -S venti-bin
+```
+
+use `paru -S venti-bin` if you use **paru**.
+
+### build from source
 
 ```bash
 git clone https://github.com/programmersd21/venti
@@ -109,7 +121,7 @@ custom bindings: edit `[binds]` in `~/.config/venti/config.toml`
 [general]
 shell = ""   # empty: $SHELL, falls back to /bin/sh
 scrollback = 10000
-graphics = true  # enables native Sixel graphics pipeline
+graphics = true  # enables Kitty and Sixel graphics forwarding
 
 [decorations]
 border_style = "rounded"
@@ -138,7 +150,7 @@ docs: `docs/configuration.md`
 ## design
 
 - **linux only**: vt100 terminal emulation via term-wm-vt100 (patched)
-- **high-performance graphics**: pure-Rust Sixel pipeline using `icy_sixel` and `ratatui-image`, validated against the `foot` terminal under Wayland
+- **graphics support**: Kitty graphics and Sixel are selected from the attached terminal's `TERM` and `TERM_PROGRAM` identity
 - **fast**: event-driven, minimal allocations, diff-based rendering
 - **minimal deps**: ratatui, crossterm, serde, nix syscalls
 - **no ui framework overhead**: custom rendering for perfect pixel control
@@ -179,14 +191,9 @@ cargo clippy          # lint
 - `docs/zsh.md` - zsh setup and completions
 - `docs/index.md` - faq and troubleshooting
 
-## Sixel Graphics Support (v0.2 Architecture)
+## graphics
 
-In the **v0.2 Sixel Major Release**, Venti standardizes on a **pure-Rust Sixel-only** graphics architecture:
-
-- **PTY Stream Interception**: `sixel::SixelStreamParser` intercepts Sixel DCS sequences (`ESC P ... q ... ESC \`) directly from the PTY stream before forwarding clean terminal text to `vt100::Parser`.
-- **Pure-Rust Decoder**: Leverages `icy_sixel::SixelImage::decode()` with color quantization via `quantette` without invoking C dependencies.
-- **Foot Terminal Validation**: Native high-performance Sixel rendering in `foot` under Wayland/Hyprland serves as the primary reference test bed, guaranteeing zero layout jitter, precise border clipping, and robust scrollback synchronization.
-- **Ratatui Rendering Integration**: Sixel images are managed and displayed within pane bounds using `ratatui-image`.
+Venti forwards Kitty graphics protocol and Sixel sequences, subject to the attached terminal's detected capabilities. iTerm2 image sequences are unsupported. See [graphics documentation](docs/graphics.md) for protocol scope and limitations.
 
 ## contributing
 
@@ -206,6 +213,6 @@ colors from catppuccin.
 
 ---
 
-**venti 0.2.0**, 2026-11-18
+**venti 0.2.0**, 2026-11-19
 
 *a fast, quiet terminal multiplexer for linux.*

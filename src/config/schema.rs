@@ -8,7 +8,7 @@ pub struct GeneralConfig {
     pub shell: String,
     pub scrollback: usize,
     pub osc52: bool,
-    /// forward sixel / kitty / iterm2 graphics escape sequences from panes to
+    /// forward sixel / kitty graphics escape sequences from panes to
     /// clients verbatim. when false, images are dropped instead of drawn.
     ///
     /// off by default: terminal graphics support is experimental and a

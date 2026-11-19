@@ -1,4 +1,12 @@
-//! Outer terminal graphics capability detection for Venti v0.2.
+//! Outer terminal graphics capability detection.
+//!
+//! Determines which graphics protocol sequences the client forwards to the host
+//! (`apply_update.rs`) and which `TERM` the server advertises to panes.
+//!
+//! Detection is name-based, mirroring how Zellij and chafa probe: terminals are
+//! trusted only for protocols they are documented to support. Inside tmux we
+//! can't see the real outer terminal at all, so everything is wrapped in the DCS
+//! passthrough envelope and the outer terminal decides.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,8 +19,6 @@ pub enum OuterGraphics {
     Kitty,
     /// Sixel graphics: `ESC P … q … ESC \\` (foot, konsole, mlterm, contour, mintty).
     Sixel,
-    /// iTerm2 graphics protocol: OSC 1337 File=...
-    Iterm2,
     /// We are inside tmux; outer terminal decides via passthrough.
     Tmux,
     /// No graphics capability detected.
@@ -20,11 +26,11 @@ pub enum OuterGraphics {
     Unknown,
 }
 
+/// Maps a graphics capability code (from the query responder) to an `OuterGraphics` value.
+/// Bit 1 = Kitty, bit 0 = Sixel.
 pub fn from_code(code: u8) -> OuterGraphics {
     if code & (1 << 1) != 0 {
         OuterGraphics::Kitty
-    } else if code & (1 << 2) != 0 {
-        OuterGraphics::Iterm2
     } else if code & (1 << 0) != 0 {
         OuterGraphics::Sixel
     } else {
@@ -32,6 +38,7 @@ pub fn from_code(code: u8) -> OuterGraphics {
     }
 }
 
+/// Maps a terminal name (TERM or TERM_PROGRAM) to its graphics capability, or `None` for unknown terminals.
 pub fn from_term_name(term: &str) -> Option<OuterGraphics> {
     let t = term.to_lowercase();
     // kitty-protocol terminals (checked first; wezterm supports both but KGP is preferred)
@@ -44,15 +51,23 @@ pub fn from_term_name(term: &str) -> Option<OuterGraphics> {
         || t.contains("mlterm")
         || t.contains("mintty")
         || t.contains("contour")
-        || t.contains("xterm")
+        || t.starts_with("xterm-sixel")
     {
         return Some(OuterGraphics::Sixel);
     }
     None
 }
 
+/// Resolves graphics support from the terminal name reported by a client.
+/// The daemon may have been started in a different terminal, so its own environment
+/// is not authoritative for newly attached clients.
 pub fn from_client_term(term: &str) -> OuterGraphics {
-    if let Some(graphics) = from_term_name(term) {
+    from_client_identity(term, None)
+}
+
+/// Resolves the client terminal from its `TERM` and `TERM_PROGRAM` values.
+pub fn from_client_identity(term: &str, term_program: Option<&str>) -> OuterGraphics {
+    if let Some(graphics) = from_term_name(term).or_else(|| term_program.and_then(from_term_name)) {
         return graphics;
     }
     let name = term.to_lowercase();
@@ -65,6 +80,18 @@ pub fn from_client_term(term: &str) -> OuterGraphics {
     OuterGraphics::Unknown
 }
 
+/// Returns the most useful terminal identity for child processes and queries.
+pub fn client_term_identity(term: &str, term_program: Option<&str>) -> String {
+    if from_term_name(term).is_some()
+        || term_program.is_none_or(|program| from_term_name(program).is_none())
+    {
+        term.to_string()
+    } else {
+        term_program.unwrap_or_default().to_string()
+    }
+}
+
+/// Returns the `TERM` value to advertise to child panes, based on the outer terminal.
 pub fn child_term_for(outer_term: &str, graphics: OuterGraphics) -> String {
     match graphics {
         OuterGraphics::Kitty => "xterm-kitty".to_string(),
@@ -79,6 +106,7 @@ pub fn child_term_for(outer_term: &str, graphics: OuterGraphics) -> String {
     }
 }
 
+/// Returns the `TERM_PROGRAM` value to advertise to child panes.
 pub fn child_term_program_for(graphics: OuterGraphics) -> &'static str {
     match graphics {
         OuterGraphics::Kitty => "kitty",
@@ -86,6 +114,9 @@ pub fn child_term_program_for(graphics: OuterGraphics) -> &'static str {
     }
 }
 
+/// Returns the terminal identity to report for XTVERSION queries as `(name, version)`.
+/// We proxy a version string that satisfies apps gating features on version numbers
+/// (e.g. yazi requires kitty >= 0.28 for graphics).
 pub fn xtversion_identity_for(term: &str, graphics: OuterGraphics) -> (&'static str, &'static str) {
     let term = term.to_lowercase();
     match graphics {
@@ -128,14 +159,22 @@ fn detect_uncached() -> OuterGraphics {
     if let Some(g) = from_term_name(&term).or_else(|| from_term_name(&prog)) {
         return g;
     }
+    if std::env::var_os("KITTY_WINDOW_ID").is_some()
+        || std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some()
+        || std::env::var_os("WEZTERM_PANE").is_some()
+    {
+        return OuterGraphics::Kitty;
+    }
     OuterGraphics::Unknown
 }
 
+/// Graphics capability of the outer terminal (cached per process).
 pub fn detect() -> OuterGraphics {
     static CACHED: OnceLock<OuterGraphics> = OnceLock::new();
     *CACHED.get_or_init(detect_uncached)
 }
 
+/// Graphics capability to use when inside tmux, based on the outer terminal. `None` when it cannot be determined.
 pub fn tmux_outer_graphics() -> Option<OuterGraphics> {
     if std::env::var_os("TMUX").is_some() {
         tmux_client_graphics()
@@ -144,6 +183,7 @@ pub fn tmux_outer_graphics() -> Option<OuterGraphics> {
     }
 }
 
+/// Whether the outer terminal (or the one behind tmux) can render Kitty Graphics Protocol.
 pub fn kitty_supported() -> bool {
     match detect() {
         OuterGraphics::Kitty => true,
@@ -152,6 +192,7 @@ pub fn kitty_supported() -> bool {
     }
 }
 
+/// Whether the outer terminal (or the one behind tmux) can render Sixel graphics.
 pub fn sixel_supported() -> bool {
     match detect() {
         OuterGraphics::Sixel => true,
@@ -162,6 +203,7 @@ pub fn sixel_supported() -> bool {
 
 static CELL_PIXELS: AtomicU64 = AtomicU64::new(0);
 
+/// Cell pixel size used for graphics geometry. Falls back to 10×20 when no terminal has reported one.
 pub fn cell_pixel_size() -> (u32, u32) {
     let packed = CELL_PIXELS.load(Ordering::Relaxed);
     if packed == 0 {
@@ -174,6 +216,7 @@ pub fn cell_pixel_size() -> (u32, u32) {
     }
 }
 
+/// Records the attached terminal's cell pixel size when the client reports one.
 pub fn set_cell_pixel_size(size: Option<(u16, u16)>) {
     let Some((width, height)) = size else {
         return;
@@ -187,18 +230,25 @@ pub fn set_cell_pixel_size(size: Option<(u16, u16)>) {
     );
 }
 
+/// Graphics context resolved once per child spawn: which TERM to advertise and
+/// whether the attached terminal speaks Kitty or Sixel graphics.
+/// Groups spawn parameters so the PTY spawn path does not take a growing list of extra arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsSpawn {
+    /// TERM value the client reported to venti; advertised to the child.
     pub term: String,
+    /// Capability of the attached terminal (or the one behind tmux).
     pub graphics: OuterGraphics,
 }
 
 impl GraphicsSpawn {
+    /// Builds from the process TERM, defaulting to xterm-256color.
     pub fn from_env() -> Self {
         let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
         Self::from_term(&term)
     }
 
+    /// Builds from an explicit TERM value, e.g. for a run-time pane spawn.
     pub fn from_term(term: &str) -> Self {
         Self {
             graphics: from_client_term(term),
@@ -206,10 +256,12 @@ impl GraphicsSpawn {
         }
     }
 
+    /// The `TERM` value the child pane must advertise.
     pub fn child_term(&self) -> String {
         child_term_for(&self.term, self.graphics)
     }
 
+    /// The `TERM_PROGRAM` value the child pane must advertise.
     pub fn child_term_program(&self) -> &'static str {
         child_term_program_for(self.graphics)
     }
@@ -223,6 +275,8 @@ mod tests {
     fn from_term_name_maps_known_terminals() {
         assert_eq!(from_term_name("kitty"), Some(OuterGraphics::Kitty));
         assert_eq!(from_term_name("xterm-kitty"), Some(OuterGraphics::Kitty));
+        assert_eq!(from_term_name("xterm-256color"), None);
+        assert_eq!(from_term_name("xterm-sixel"), Some(OuterGraphics::Sixel));
         assert_eq!(from_term_name("ghostty"), Some(OuterGraphics::Kitty));
         assert_eq!(from_term_name("wezterm"), Some(OuterGraphics::Kitty));
         assert_eq!(from_term_name("foot"), Some(OuterGraphics::Sixel));
@@ -231,7 +285,6 @@ mod tests {
         assert_eq!(from_term_name("mintty"), Some(OuterGraphics::Sixel));
         assert_eq!(from_term_name("contour"), Some(OuterGraphics::Sixel));
         assert_eq!(from_term_name("tmux"), None);
-        assert_eq!(from_term_name("xterm-256color"), Some(OuterGraphics::Sixel));
     }
 
     #[test]
@@ -246,5 +299,21 @@ mod tests {
             "xterm-kitty"
         );
         assert_eq!(child_term_program_for(OuterGraphics::Kitty), "kitty");
+    }
+
+    #[test]
+    fn term_program_identifies_graphics_when_term_is_generic() {
+        assert_eq!(
+            from_client_identity("xterm-256color", Some("kitty")),
+            OuterGraphics::Kitty
+        );
+        assert_eq!(
+            client_term_identity("xterm-256color", Some("kitty")),
+            "kitty"
+        );
+        assert_eq!(
+            from_client_identity("xterm-256color", Some("foot")),
+            OuterGraphics::Sixel
+        );
     }
 }

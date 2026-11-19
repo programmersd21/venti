@@ -77,40 +77,22 @@ fn kitty_query_is_not_forwarded_as_graphic() {
 }
 
 #[test]
-fn iterm2_sequence_is_captured() {
+fn unsupported_osc_image_sequence_stays_plain() {
     let mut parser = GraphicsParser::new();
     let out = parser.split(b"\x1b]1337;File=inline=1:pixels\x07");
-    assert_eq!(out.len(), 1);
-    match &out[0] {
-        Segment::Graphic(cmd) => assert_eq!(cmd.format, GraphicFormat::Iterm2),
-        other => panic!("expected graphic, got {other:?}"),
-    }
-}
-
-#[test]
-fn iterm2_multipart_file_commands_are_captured() {
-    let mut parser = GraphicsParser::new();
-    let out = parser.split(
-        b"\x1b]1337;MultipartFile=inline=1:size=3\x07\x1b]1337;FilePart=YWJj\x07\x1b]1337;FileEnd\x07",
+    assert!(
+        !out.iter()
+            .any(|segment| matches!(segment, Segment::Graphic(_)))
     );
-    assert_eq!(out.len(), 3);
-    for segment in &out {
-        match segment {
-            Segment::Graphic(cmd) => assert_eq!(cmd.format, GraphicFormat::Iterm2),
-            other => panic!("expected iterm2 graphic command, got {other:?}"),
-        }
-    }
-    assert!(matches!(&out[1], Segment::Graphic(cmd) if cmd.data == b"\x1b]1337;FilePart=YWJj\x07"));
-    assert!(matches!(&out[2], Segment::Graphic(cmd) if cmd.data == b"\x1b]1337;FileEnd\x07"));
-}
-
-#[test]
-fn iterm2_file_part_split_across_reads_is_captured() {
-    let mut parser = GraphicsParser::new();
-    assert!(parser.split(b"\x1b]1337;FilePa").is_empty());
-    let out = parser.split(b"rt=YWJj\x1b\\");
-    assert_eq!(out.len(), 1);
-    assert!(matches!(&out[0], Segment::Graphic(cmd) if cmd.format == GraphicFormat::Iterm2));
+    let plain: Vec<u8> = out
+        .into_iter()
+        .filter_map(|segment| match segment {
+            Segment::Plain(bytes) => Some(bytes),
+            Segment::Graphic(_) => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(plain, b"\x1b]1337;File=inline=1:pixels\x07");
 }
 
 #[test]

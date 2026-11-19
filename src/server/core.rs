@@ -54,6 +54,7 @@ pub enum CoreEvent {
         cols: u16,
         rows: u16,
         term: String,
+        term_program: Option<String>,
         cell_pixel: Option<(u16, u16)>,
     },
     ConfigChanged,
@@ -149,11 +150,11 @@ pub struct ServerCore {
     /// Kitty graphics are positioned in host-terminal coordinates, so they
     /// need a cheap re-placement even when they never leave the pane bounds.
     reposition_kitty: bool,
-    /// set when a sixel/iterm2 image that was on screen got hidden (modal,
+    /// set when a sixel image that was on screen got hidden (modal,
     /// scroll out of view, alternate screen swap); the next visible frame
     /// needs an ed-two repaint to wipe the stale pixels before re-placing
     sixel_restore_pending: bool,
-    /// a sixel/iterm2 placement that was visible moved (or left the
+    /// a sixel placement that was visible moved (or left the
     /// viewport) after the pane's content scrolled. sixel pixels cannot be
     /// moved or deleted, so this frame needs an ed-two repaint. kept apart
     /// from `reemit_gfx` so an old image parked in the scrollback does not
@@ -231,9 +232,8 @@ impl ServerCore {
         restore: Option<crate::server::persist::SessionSnapshot>,
         defer_initial_pane: bool,
     ) -> (Self, Sender<CoreEvent>) {
-        // bound queued client payloads: a protocol frame can be up to 1 MiB.
-        // socket reader threads then provide backpressure instead of retaining
-        // an unbounded stream of frames while the core is busy rendering.
+        // bound queued client events. frames can contain large graphics payloads,
+        // so socket reader threads apply backpressure while the core is busy.
         let (event_tx, event_rx) = crossbeam_channel::bounded(64);
         let mut bindings = KeyBindings::new(config.profile.mode, &config.input.passthrough);
         bindings.set_disabled(&config.input.disabled_keys);
@@ -494,7 +494,7 @@ impl ServerCore {
     /// shifts stored graphic commands after pane content scrolls, and detects
     /// scrollback navigation. returns true when any pane holding graphics was
     /// shifted; callers re-place kitty placements and force a full redraw when
-    /// a visible sixel/iterm2 image moved.
+    /// a visible sixel image moved.
     fn shift_graphics_for_scroll(&mut self) -> bool {
         let (layout_cols, layout_rows) = self.effective_size();
         let (_, _, _, content) = self.chrome_areas(Rect::new(0, 0, layout_cols, layout_rows));
@@ -513,20 +513,23 @@ impl ServerCore {
                 .iter()
                 .find(|(pid, _)| *pid == id)
                 .map(|(_, rect)| inner_rect(*rect, border));
-            let (alternate_screen, scroll_count) = pane
+            let (alternate_screen, scrollback_rows) = pane
                 .parser
                 .lock()
                 .map(|mut parser| {
-                    let screen = parser.screen();
-                    let alt = screen.alternate_screen();
-                    let len = crate::pane::search::scrollback_len(&mut parser);
-                    (alt, len as i64)
+                    let alternate = parser.screen().alternate_screen();
+                    let scrollback_rows = crate::pane::search::scrollback_len(&mut parser) as i64;
+                    (alternate, scrollback_rows)
                 })
                 .unwrap_or((false, 0));
+            let scroll_count = if alternate_screen {
+                pane.graphics_scrolls.load(Ordering::Acquire)
+            } else {
+                scrollback_rows
+            };
             let anchor_key = (id, alternate_screen);
-            // The parser reports cumulative grid scrolling even after its
-            // bounded scrollback stops growing. Track each screen separately
-            // so alt-screen activity cannot move main-screen placements.
+            // Main-screen scrollback anchors content. Alternate screens lack
+            // scrollback, so their counter comes from observed row shifts.
             let shift = graphics_scroll_delta(&mut self.gfx_anchors, anchor_key, scroll_count);
             if shift != 0
                 && let Ok(mut store) = pane.graphics.lock()
@@ -550,10 +553,6 @@ impl ServerCore {
                                 cell_w,
                                 cell_h,
                             ),
-                            crate::pane::GraphicFormat::Iterm2 => {
-                                let row = cmd.row + pane.scroll_offset as i32;
-                                row >= 0 && row < i32::from(inner.height) && cmd.col < inner.width
-                            }
                             crate::pane::GraphicFormat::Kitty => false,
                         }
                     })
@@ -570,7 +569,7 @@ impl ServerCore {
                     -(self.config.general.scrollback as i32)
                 };
                 let freed = store.drop_screen_scrolled_out(limit, Some(alternate_screen));
-                // sixel/iterm2 pixels are burned into the host grid: any
+                // sixel pixels are burned into the host grid: any
                 // visible-image move (or a visible image leaving the viewport)
                 // needs an ed-two repaint to erase the old copy.
                 if was_visible || visible(&store) {
@@ -641,7 +640,7 @@ impl ServerCore {
             return true;
         }
         // keep rendering while pane layout animations are active
-        if self.pane_animations.has_active() {
+        if !self.pane_animations.animations.is_empty() {
             return true;
         }
         // the cat animates at ~7 fps while it is visiting
@@ -783,7 +782,7 @@ impl ServerCore {
             return;
         }
         self.drop_alternate_screen_graphics(&ids);
-        // also queue a soft reset: sixel/iterm2 images lay outside
+        // also queue a soft reset: sixel images lay outside
         // the cell grid model, and the ED2+full repaint that follows is the
         // erase we can trigger from inside without the app's cooperation.
         for client in self.clients.values_mut() {
@@ -869,10 +868,12 @@ impl ServerCore {
                 cols,
                 rows,
                 term,
+                term_program,
                 cell_pixel,
             } => {
                 crate::util::outer_term::set_cell_pixel_size(cell_pixel);
-                self.session.outer_graphics = crate::util::outer_term::from_client_term(&term);
+                self.session.outer_graphics =
+                    crate::util::outer_term::from_client_identity(&term, term_program.as_deref());
                 // upgrade every existing pane's probe so a pane spawned before
                 // the client attached gets the attached terminal's real
                 // graphics capabilities instead of "unknown" forever
@@ -881,7 +882,8 @@ impl ServerCore {
                     pane.graphics_probe
                         .store(code, std::sync::atomic::Ordering::Relaxed);
                 }
-                self.session.outer_term = term;
+                self.session.outer_term =
+                    crate::util::outer_term::client_term_identity(&term, term_program.as_deref());
                 let backend = ClientBackend::new(cols, rows);
                 // a client we cannot build a backend for is dropped, not registered;
                 // registering would pin a dead client forever.
@@ -2801,7 +2803,7 @@ impl ServerCore {
             pane.scroll_offset = next;
             self.reposition_kitty = true;
             // Scrollback repaints the virtual screen by cell coordinates. Sixel
-            // and iTerm2 images need to be cleared and replayed at those new
+            // images need to be cleared and replayed at those new
             // anchors because neither protocol has a placement move command.
             self.reemit_gfx = true;
             pane.dirty.store(true, Ordering::Release);
@@ -3642,6 +3644,15 @@ impl ServerCore {
             return;
         }
 
+        // a layout animation can finish between event-loop checks. render its
+        // destination once so kitty placements are re-anchored after the last
+        // animated frame instead of remaining at an intermediate coordinate.
+        if !self.pane_animations.animations.is_empty() && !self.pane_animations.has_active() {
+            self.force_full = true;
+            self.reposition_kitty = true;
+            self.sixel_restore_pending = true;
+        }
+
         // a child that erased its screen (clear, vim startup, RIS) owns the
         // blank grid: drop that screen's stored images and repaint fully so a
         // later redraw cannot resurrect an image the app erased.
@@ -3663,7 +3674,7 @@ impl ServerCore {
         self.update_toast();
 
         // re-anchor stored graphics after scroll output or scrollback navigation.
-        // kitty placements can be re-placed cheaply; sixel/iterm2 pixels only
+        // kitty placements can be re-placed cheaply; sixel pixels only
         // move via a full ED2 repaint, and only when the image was on screen.
         if self.config.general.graphics && self.shift_graphics_for_scroll() {
             self.reposition_kitty = true;
@@ -3723,13 +3734,13 @@ impl ServerCore {
             .retain(|id, _| self.session.panes.contains_key(id));
 
         // a full repaint emits ESC[2J, which clears host-side graphics too.
-        // a sixel or iterm2 image cannot be erased or moved incrementally
+        // a sixel or image cannot be erased or moved incrementally
         // (there is no delete sequence), so a frame that might show a
         // different placement must be a full redraw. kitty keeps its cheap
         // delete/place path, and ordinary repaints stay a diff.
         //
         // Scrollback navigation repaints cells by coordinates rather than
-        // scrolling the host terminal's native grid. Sixel and iTerm2 images
+        // scrolling the host terminal's native grid. Sixel images
         // therefore need a clear and replay at their new cell anchors.
         let scroll = self.reemit_gfx;
         let sixel_any = eff_rects.iter().any(|(id, _)| {
@@ -3745,10 +3756,8 @@ impl ServerCore {
                 .lock()
                 .map(|store| {
                     store.active_commands().iter().any(|cmd| {
-                        matches!(
-                            cmd.format,
-                            crate::pane::GraphicFormat::Sixel | crate::pane::GraphicFormat::Iterm2
-                        ) && cmd.alternate_screen == active_alt
+                        matches!(cmd.format, crate::pane::GraphicFormat::Sixel)
+                            && cmd.alternate_screen == active_alt
                     })
                 })
                 .unwrap_or(false)
@@ -3768,10 +3777,8 @@ impl ServerCore {
             let use_border = border;
             let inner = inner_rect(*rect, use_border);
             store.active_commands().iter().any(|cmd| {
-                matches!(
-                    cmd.format,
-                    crate::pane::GraphicFormat::Sixel | crate::pane::GraphicFormat::Iterm2
-                ) && cmd.alternate_screen == active_alt
+                matches!(cmd.format, crate::pane::GraphicFormat::Sixel)
+                    && cmd.alternate_screen == active_alt
                     && {
                         let adjusted = cmd.row + pane.scroll_offset as i32;
                         adjusted >= 0 && adjusted < i32::from(inner.height) && cmd.col < inner.width
@@ -3784,27 +3791,8 @@ impl ServerCore {
         ) || self.show_help
             || self.show_welcome;
         let sixel_restore = std::mem::take(&mut self.sixel_restore_pending);
-        let iterm2_any = eff_rects.iter().any(|(id, _)| {
-            let Some(pane) = self.session.panes.get(id) else {
-                return false;
-            };
-            let active_alt = pane
-                .parser
-                .lock()
-                .map(|parser| parser.screen().alternate_screen())
-                .unwrap_or(false);
-            pane.graphics
-                .lock()
-                .map(|store| {
-                    store.active_commands().iter().any(|cmd| {
-                        cmd.format == crate::pane::GraphicFormat::Iterm2
-                            && cmd.alternate_screen == active_alt
-                    })
-                })
-                .unwrap_or(false)
-        });
         // Kitty keeps its pixel data on the host and can use cheap placements.
-        // Sixel and iTerm2 have no placement operation, so a scroll requires a
+        // Sixel have no placement operation, so a scroll requires a
         // clear before replaying the stored image at its new location.
         // Also, whenever graphics change (an image was unselected, replaced, or
         // a new image was selected), the old Sixel pixels must be physically erased
@@ -3851,7 +3839,7 @@ impl ServerCore {
                     .any(|key| !self.emitted_gfx.contains(key)));
 
         let sixel_repaint = std::mem::take(&mut self.sixel_repaint);
-        let sixel_needs_ed2 = graphics_scroll_needs_ed2(scroll, sixel_any, iterm2_any)
+        let sixel_needs_ed2 = graphics_scroll_needs_ed2(scroll, sixel_any)
             || sixel_repaint
             || graphics_changed
             || (sixel_visible
@@ -4078,11 +4066,7 @@ impl ServerCore {
                     // closing the modal re-emits them from hidden_gfx.
                     if modal_open {
                         for cmd in store.active_commands() {
-                            if matches!(
-                                cmd.format,
-                                crate::pane::GraphicFormat::Sixel
-                                    | crate::pane::GraphicFormat::Iterm2
-                            ) {
+                            if matches!(cmd.format, crate::pane::GraphicFormat::Sixel) {
                                 let key = (*id, cmd.seq);
                                 if client.emitted_gfx.contains(&key) {
                                     self.sixel_restore_pending = true;
@@ -4099,11 +4083,7 @@ impl ServerCore {
                     let mut used_placements: Vec<u64> = Vec::new();
                     for cmd in store.active_commands() {
                         if cmd.alternate_screen != active_alt {
-                            if matches!(
-                                cmd.format,
-                                crate::pane::GraphicFormat::Sixel
-                                    | crate::pane::GraphicFormat::Iterm2
-                            ) {
+                            if matches!(cmd.format, crate::pane::GraphicFormat::Sixel) {
                                 let key = (*id, cmd.seq);
                                 if client.emitted_gfx.contains(&key) {
                                     self.sixel_restore_pending = true;
@@ -4229,7 +4209,6 @@ impl ServerCore {
                         let format = match cmd.format {
                             crate::pane::GraphicFormat::Sixel => crate::proto::GfxFormat::Sixel,
                             crate::pane::GraphicFormat::Kitty => crate::proto::GfxFormat::Kitty,
-                            crate::pane::GraphicFormat::Iterm2 => crate::proto::GfxFormat::Iterm2,
                         };
                         // first emission sends the pixel payload; already-transmitted
                         // images stay on the host, so re-placing happens only when the
@@ -4276,7 +4255,7 @@ impl ServerCore {
                         } else if was_emitted {
                             let was_hidden = client.hidden_gfx.remove(&key);
                             // on force_full: always re-emit if was hidden (modal->normal, workspace switch)
-                            // for non-hidden kitty: skip (persists on host), but sixel/iterm2 need re-emission
+                            // for non-hidden kitty: skip (persists on host), but sixel need re-emission
                             let needs_reemit: Option<Vec<u8>> = if force_full {
                                 // a full repaint issues ESC[2J and the host
                                 // clears its images with it, so every format
@@ -4881,8 +4860,8 @@ fn graphics_need_reposition(
         || (kitty_viewport_moved && format == crate::pane::GraphicFormat::Kitty)
 }
 
-pub(crate) fn graphics_scroll_needs_ed2(scroll: bool, has_sixel: bool, has_iterm2: bool) -> bool {
-    scroll && (has_sixel || has_iterm2)
+pub(crate) fn graphics_scroll_needs_ed2(scroll: bool, has_sixel: bool) -> bool {
+    scroll && has_sixel
 }
 
 fn graphics_scroll_delta(
@@ -4980,6 +4959,7 @@ mod floating_resize_tests {
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
 
     #[test]
     fn viewport_scroll_repositions_kitty_without_repainting_sixel() {
@@ -5000,11 +4980,10 @@ mod floating_resize_tests {
     }
 
     #[test]
-    fn viewport_scroll_clears_and_replays_sixel_and_iterm2_graphics() {
-        assert!(graphics_scroll_needs_ed2(true, true, false));
-        assert!(graphics_scroll_needs_ed2(true, false, true));
-        assert!(!graphics_scroll_needs_ed2(true, false, false));
-        assert!(!graphics_scroll_needs_ed2(false, true, true));
+    fn viewport_scroll_clears_and_replays_sixel_graphics() {
+        assert!(graphics_scroll_needs_ed2(true, true));
+        assert!(!graphics_scroll_needs_ed2(true, false));
+        assert!(!graphics_scroll_needs_ed2(false, true));
     }
 
     #[test]
@@ -5100,6 +5079,7 @@ mod floating_resize_tests {
             cols: 160,
             rows: 50,
             term: "xterm-kitty".into(),
+            term_program: None,
             cell_pixel: Some((10, 20)),
         });
 
@@ -5135,6 +5115,7 @@ mod floating_resize_tests {
             cols: 100,
             rows: 30,
             term: "foot".into(),
+            term_program: None,
             cell_pixel: Some((10, 20)),
         });
 
@@ -5165,6 +5146,7 @@ mod floating_resize_tests {
             cols: 100,
             rows: 30,
             term: "xterm-kitty".into(),
+            term_program: None,
             cell_pixel: Some((10, 20)),
         });
         core.render_all();
@@ -5200,6 +5182,70 @@ mod floating_resize_tests {
     }
 
     #[test]
+    fn finished_pane_resize_animation_repaints_kitty_placements() {
+        let running = Arc::new(AtomicBool::new(true));
+        let mut config = crate::config::Config::default();
+        config.ui.show_welcome = false;
+        let (mut core, _) = ServerCore::new(
+            "resize-animation-graphics-test",
+            config,
+            crate::config::Theme::default_theme(),
+            running,
+            None,
+        );
+        let (server, mut client) = UnixStream::pair().expect("create test client stream");
+        client.set_nonblocking(true).expect("set nonblocking");
+        core.handle_event(CoreEvent::NewClient {
+            client_id: 1,
+            stream: server,
+            cols: 100,
+            rows: 30,
+            term: "xterm-kitty".into(),
+            term_program: None,
+            cell_pixel: Some((10, 20)),
+        });
+        core.render_all();
+        drain_test_client(&mut client);
+
+        let pane_id = core.session.focused_pane.expect("focused pane");
+        let pane = core.session.panes.get(&pane_id).expect("pane exists");
+        let mut parser = crate::pane::GraphicsParser::new();
+        let command = parser
+            .feed(b"\x1b_Ga=T,f=100,i=91;AAAA\x1b\\", 0, 0)
+            .remove(0);
+        pane.graphics.lock().expect("graphics store").push(command);
+        core.pane_animations.animate_pane(
+            pane_id,
+            Rect::new(0, 0, 40, 20),
+            Rect::new(0, 0, 50, 20),
+            20,
+            crate::config::schema::EasingType::Linear,
+            true,
+        );
+        core.render_all();
+        drain_test_client(&mut client);
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            core.needs_render(),
+            "the finished animation needs a final frame"
+        );
+        core.render_all();
+        let bytes = drain_test_client(&mut client);
+        let (message, _) = crate::proto::decode_from_slice::<crate::proto::ServerMsg>(&bytes)
+            .expect("decode final resize frame")
+            .expect("final resize frame exists");
+        let crate::proto::ServerMsg::Update(update) = message else {
+            panic!("expected screen update");
+        };
+        assert!(update.full_redraw);
+        assert!(
+            !update.gfx.is_empty(),
+            "final frame restores kitty placement"
+        );
+    }
+
+    #[test]
     fn workspace_roundtrip_replays_hidden_kitty_image() {
         let running = Arc::new(AtomicBool::new(true));
         let mut config = crate::config::Config::default();
@@ -5223,6 +5269,7 @@ mod floating_resize_tests {
             cols: 100,
             rows: 30,
             term: "xterm-kitty".into(),
+            term_program: None,
             cell_pixel: Some((10, 20)),
         });
         core.render_all();
@@ -5295,6 +5342,7 @@ mod floating_resize_tests {
             cols: 100,
             rows: 30,
             term: "xterm-kitty".into(),
+            term_program: None,
             cell_pixel: Some((10, 20)),
         });
         core.render_all();

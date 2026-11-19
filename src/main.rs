@@ -112,7 +112,6 @@ fn main() -> anyhow::Result<()> {
             let graphics_label = match (graphics, tmux_outer) {
                 (venti::util::outer_term::OuterGraphics::Kitty, _) => "kitty".to_string(),
                 (venti::util::outer_term::OuterGraphics::Sixel, _) => "sixel".to_string(),
-                (venti::util::outer_term::OuterGraphics::Iterm2, _) => "iterm2".to_string(),
                 (venti::util::outer_term::OuterGraphics::Tmux, Some(g)) => {
                     format!("tmux ({g:?})").to_lowercase()
                 }

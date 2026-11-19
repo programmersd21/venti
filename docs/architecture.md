@@ -49,16 +49,18 @@ venti is a client-server terminal multiplexer designed specifically for linux. i
 ### 2. pty & emulation layer (`src/pane/`)
 - launches child shells with `portable-pty` and sets appropriate terminal environment variables (`xterm-kitty` for kitty/ghostty/wezterm, matching outer term for foot/konsole).
 - parses escape sequences with a patched `vt100` parser.
-- intercepts both sixel (`ESC P ... q`) and kitty graphics apc (`ESC _G ... ESC \`) without blocking the main event loop.
+- intercepts sixel (`ESC P ... q`) and kitty graphics APC (`ESC _G ... ESC \`) without blocking the main event loop. iTerm2 image protocol is unsupported.
 - answers capability probes (`da1`, `xtversion`, and kitty `a=q`) truthful to the outer terminal's supported feature set.
 
 ### 3. graphics pipeline & unicode placeholders (`src/pane/graphics.rs`, `src/render/pane_view.rs`)
 - manages image lifecycles, chunked re-assembly, and dimension caching.
+- preserves image ids across Kitty animation frames and forwards playback controls.
 - uses **unicode placeholders (`U+10EEEE`)** with diacritics mapping daemon-wide image ids to virtual cells.
 - enforces strict viewport clipping and scrollback repositioning so images never bleed across pane borders.
+- restores Kitty placements after completed pane-layout animations and full redraws.
 
 ### 4. client frontend (`src/client/`)
 - attaches to running sessions via unix domain sockets (`$XDG_RUNTIME_DIR/venti/<uid>/<session>.sock`).
 - puts the local terminal into raw mode and alternate screen using `crossterm`.
-- emits graphics sequences prior to character cells to ensure clean overlay rendering without text tearing.
+- emits graphics sequences after cell updates so text and pane borders remain visible above image pixels.
 - cleans up forwarded kitty image placements on shutdown so host terminals are left clean.

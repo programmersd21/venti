@@ -31,9 +31,34 @@ pub fn hello_msg() -> HelloMsg {
         term: std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()),
         colorterm: std::env::var("COLORTERM").ok(),
         size: (cols, rows),
-        env: Vec::new(),
+        env: client_term_program()
+            .map(|value| ("TERM_PROGRAM".to_string(), value))
+            .into_iter()
+            .collect(),
         cell_pixel,
     }
+}
+
+fn client_term_program() -> Option<String> {
+    client_term_program_from_env(
+        std::env::var("TERM_PROGRAM").ok(),
+        std::env::var_os("KITTY_WINDOW_ID").is_some(),
+        std::env::var_os("GHOSTTY_RESOURCES_DIR").is_some(),
+        std::env::var_os("WEZTERM_PANE").is_some(),
+    )
+}
+
+fn client_term_program_from_env(
+    term_program: Option<String>,
+    kitty: bool,
+    ghostty: bool,
+    wezterm: bool,
+) -> Option<String> {
+    term_program
+        .filter(|value| !value.is_empty() && value != "venti")
+        .or_else(|| kitty.then(|| "kitty".to_string()))
+        .or_else(|| ghostty.then(|| "ghostty".to_string()))
+        .or_else(|| wezterm.then(|| "wezterm".to_string()))
 }
 
 /// connects to the venti server unix socket and enters interactive client session.
@@ -148,8 +173,14 @@ pub fn run_client(socket_path: &Path, _session_name: &str) -> Result<(), String>
                                 }
                                 ServerMsg::RawOutput(bytes) => {
                                     saw_server_msg = true;
-                                    let _ = out.write_all(&bytes);
-                                    let _ = out.flush();
+                                    if let Err(error) =
+                                        out.write_all(&bytes).and_then(|()| out.flush())
+                                    {
+                                        running.store(false, Ordering::Relaxed);
+                                        return Err(format!(
+                                            "failed to write terminal output: {error}"
+                                        ));
+                                    }
                                 }
                                 ServerMsg::HelloAck { graphics, .. } => {
                                     saw_server_msg = true;
@@ -207,4 +238,33 @@ pub fn run_client(socket_path: &Path, _session_name: &str) -> Result<(), String>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_term_program_from_env;
+
+    #[test]
+    fn terminal_identity_uses_emulator_markers_when_term_program_is_missing() {
+        assert_eq!(
+            client_term_program_from_env(None, true, false, false),
+            Some("kitty".into())
+        );
+        assert_eq!(
+            client_term_program_from_env(None, false, true, false),
+            Some("ghostty".into())
+        );
+        assert_eq!(
+            client_term_program_from_env(None, false, false, true),
+            Some("wezterm".into())
+        );
+    }
+
+    #[test]
+    fn terminal_identity_does_not_forward_venti_as_the_host() {
+        assert_eq!(
+            client_term_program_from_env(Some("venti".into()), true, false, false),
+            Some("kitty".into())
+        );
+    }
 }

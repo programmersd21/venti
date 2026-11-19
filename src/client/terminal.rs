@@ -28,6 +28,7 @@ impl KittyImageIds {
 /// raii guard ensuring client terminal state is restored on drop or panic.
 pub struct TerminalGuard {
     mouse: bool,
+    kitty_keyboard: bool,
     kitty_images: std::sync::Arc<std::sync::Mutex<KittyImageIds>>,
 }
 
@@ -42,6 +43,16 @@ impl TerminalGuard {
         enable_raw_mode()?;
         let mut out = stdout();
         out.execute(EnterAlternateScreen)?;
+        let kitty_keyboard =
+            crate::util::outer_term::detect() == crate::util::outer_term::OuterGraphics::Kitty;
+        if kitty_keyboard {
+            use std::io::Write;
+            if let Err(error) = out.write_all(b"\x1b[>1u").and_then(|()| out.flush()) {
+                let _ = out.execute(LeaveAlternateScreen);
+                let _ = disable_raw_mode();
+                return Err(error);
+            }
+        }
 
         if mouse {
             // 1000: button clicks, 1002: button+drag, 1003: any motion, 1006: SGR extended.
@@ -56,6 +67,7 @@ impl TerminalGuard {
         out.execute(EnableFocusChange)?;
         Ok(Self {
             mouse,
+            kitty_keyboard,
             kitty_images: std::sync::Arc::new(std::sync::Mutex::new(KittyImageIds::default())),
         })
     }
@@ -110,6 +122,11 @@ impl Drop for TerminalGuard {
         // the host terminal. without this they linger as ghosts on the user's
         // shell after venti quits.
         self.delete_kitty_images(&mut out);
+        if self.kitty_keyboard {
+            use std::io::Write;
+            let _ = out.write_all(b"\x1b[<u");
+            let _ = out.flush();
+        }
         let _ = out.execute(DisableFocusChange);
         let _ = out.execute(DisableBracketedPaste);
         if self.mouse {

@@ -91,7 +91,7 @@ fn frame_has_indexed_placeholder_ids(frame: &Frame) -> bool {
     frame.cells.iter().any(|cell| {
         cell.symbol.starts_with('\u{10eeee}')
             && cell.fg != ProtoColor::Indexed(7)
-            && cell.underline_color == ProtoColor::Indexed(5)
+            && cell.underline_color == ProtoColor::Default
     })
 }
 

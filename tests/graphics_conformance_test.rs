@@ -1,11 +1,10 @@
 //! conformance test for the image protocols a terminal multiplexer must
-//! survive: kitty graphics (APC), sixel (DCS) and iTerm2 inline images (OSC).
+//! survive: kitty graphics (APC) and sixel (DCS).
 //!
 //! the rules come from the protocol specs:
 //!   kitty: `ESC _ G <control> ; <payload> ESC \` (also terminated by ST),
 //!          payload base64, chunked with `m=1` / `m=0`
 //!   sixel: `ESC P q <data> ESC \`
-//!   iterm2: `ESC ] 1337 ; File=... BEL`
 //!
 //! the important property for a multiplexer: the payload must never end up
 //! in the text stream. if it does, the terminal prints the image data as
@@ -17,6 +16,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use venti::proto::{
     ClientMsg, HelloMsg, PROTOCOL_VERSION, ServerMsg, decode_from_slice, write_msg,
 };
@@ -38,7 +38,7 @@ impl Drop for ServerGuard {
 
 struct Frame {
     cells: Vec<String>,
-    gfx: Vec<Vec<u8>>,
+    gfx: Vec<(u16, u16, Vec<u8>)>,
 }
 
 fn wait_for_socket(path: &Path, timeout: Duration) -> bool {
@@ -72,7 +72,11 @@ fn collect_frames(
                     if let ServerMsg::Update(update) = msg {
                         frames.push(Frame {
                             cells: update.cells.iter().map(|c| c.symbol.clone()).collect(),
-                            gfx: update.gfx.iter().map(|g| g.data.clone()).collect(),
+                            gfx: update
+                                .gfx
+                                .iter()
+                                .map(|g| (g.col, g.row, g.data.clone()))
+                                .collect(),
                         });
                     }
                 }
@@ -100,6 +104,44 @@ fn looks_like_payload_leak(text: &str) -> bool {
     false
 }
 
+fn kitty_rgb_payload(data: &[u8]) -> Option<Vec<u8>> {
+    let mut rest = data;
+    let mut encoded = Vec::new();
+    let mut active = false;
+    let mut complete = false;
+    while let Some(start) = rest.windows(3).position(|window| window == b"\x1b_G") {
+        let body = &rest[start + 3..];
+        let end = body.windows(2).position(|window| window == b"\x1b\\")?;
+        let packet = &body[..end];
+        let Some(separator) = packet.iter().position(|byte| *byte == b';') else {
+            rest = &rest[start + 3 + end + 2..];
+            continue;
+        };
+        let control = std::str::from_utf8(&packet[..separator]).ok()?;
+        if control
+            .split(',')
+            .any(|field| field == "a=T" && control.contains("f=32"))
+        {
+            active = true;
+        }
+        if active {
+            encoded.extend_from_slice(&packet[separator + 1..]);
+            if control.split(',').any(|field| field == "m=0") {
+                complete = true;
+                break;
+            }
+        }
+        rest = &rest[start + 3 + end + 2..];
+    }
+    complete
+        .then(|| {
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()
+        })
+        .flatten()
+}
+
 fn tool_exists(tool: &str) -> bool {
     Command::new(tool)
         .arg("--help")
@@ -114,11 +156,14 @@ struct Harness {
     _guard: ServerGuard,
     read_buf: Vec<u8>,
     frames: Vec<Frame>,
-    session: String,
 }
 
 impl Harness {
     fn start(term: &str, name: &str) -> Harness {
+        Self::start_with_term_program(term, None, name)
+    }
+
+    fn start_with_term_program(term: &str, term_program: Option<&str>, name: &str) -> Harness {
         // the session name and the state directory must be unique per test:
         // the tests run in parallel and a shared session would let one
         // server replace the other one.
@@ -172,7 +217,9 @@ impl Harness {
                 term: term.to_string(),
                 colorterm: Some("truecolor".to_string()),
                 size: (100, 30),
-                env: Vec::new(),
+                env: term_program
+                    .map(|value| vec![("TERM_PROGRAM".to_string(), value.to_string())])
+                    .unwrap_or_default(),
                 cell_pixel: Some((10, 20)),
             }),
         )
@@ -190,7 +237,6 @@ impl Harness {
             _guard: guard,
             read_buf,
             frames,
-            session,
         }
     }
 
@@ -235,7 +281,7 @@ impl Harness {
     fn all_gfx(&self) -> Vec<Vec<u8>> {
         self.frames
             .iter()
-            .flat_map(|frame| frame.gfx.clone())
+            .flat_map(|frame| frame.gfx.iter().map(|(_, _, data)| data.clone()))
             .collect::<Vec<_>>()
     }
 }
@@ -352,4 +398,127 @@ fn sixel_payload_never_reaches_the_text_stream() {
             );
         }
     }
+}
+
+#[test]
+fn chafa_kitty_output_survives_the_pane_pipeline() {
+    if !tool_exists("chafa") {
+        return;
+    }
+    let mut h = Harness::start_with_term_program("xterm-256color", Some("kitty"), "kitty");
+    let path = image_path("kitty");
+    h.run_until(
+        &format!("chafa -f kitty --size 20x10 {path}"),
+        Duration::from_secs(1),
+        |h| {
+            h.all_gfx()
+                .iter()
+                .any(|data| data.windows(3).any(|w| w == b"\x1b_G"))
+        },
+        Duration::from_secs(25),
+    );
+    let image = h.all_gfx().iter().find_map(|data| kitty_rgb_payload(data));
+    assert_eq!(
+        image.as_ref().map(Vec::len),
+        Some(160 * 160 * 4),
+        "Chafa Kitty payload was not preserved as raw RGBA bytes"
+    );
+    assert!(
+        !looks_like_payload_leak(&h.all_text()),
+        "chafa Kitty payload leaked into terminal text"
+    );
+
+    let before_resize = h.frames.len();
+    write_msg(&mut h.stream, &ClientMsg::Resize(80, 24)).expect("resize pane client");
+    collect_frames(
+        &mut h.stream,
+        &mut h.read_buf,
+        Instant::now() + Duration::from_secs(4),
+        &mut h.frames,
+    );
+    assert!(
+        h.frames[before_resize..]
+            .iter()
+            .flat_map(|frame| frame.gfx.iter())
+            .any(|(_, _, data)| kitty_rgb_payload(data)
+                .is_some_and(|bytes| bytes.len() == 160 * 160 * 4)),
+        "Chafa image was not restored after resize"
+    );
+}
+
+#[test]
+fn fastfetch_kitty_logo_survives_the_pane_pipeline() {
+    if !tool_exists("fastfetch") {
+        return;
+    }
+    let mut h = Harness::start_with_term_program("xterm-256color", Some("kitty"), "fastfetch");
+    let path = image_path("fastfetch");
+    h.run_until(
+        &format!(
+            "fastfetch --kitty {path} --logo-width 20 --logo-height 10 --pipe false --show-errors"
+        ),
+        Duration::from_secs(1),
+        |h| {
+            h.all_gfx()
+                .iter()
+                .any(|data| data.windows(3).any(|w| w == b"\x1b_G"))
+        },
+        Duration::from_secs(25),
+    );
+    assert!(
+        h.all_gfx()
+            .iter()
+            .any(|data| data.windows(3).any(|w| w == b"\x1b_G")),
+        "fastfetch Kitty logo did not reach the graphics stream; terminal env was xterm-256color/kitty"
+    );
+}
+
+#[test]
+fn kitten_icat_gif_forwards_animation_frames() {
+    if !tool_exists("kitten") || !tool_exists("magick") {
+        return;
+    }
+    let path = std::env::temp_dir().join(format!("venti-animation-{}.gif", std::process::id()));
+    let status = Command::new("magick")
+        .args([
+            "-size", "8x8", "xc:red", "-delay", "10", "-size", "8x8", "xc:blue", "-delay", "10",
+            "-loop", "1",
+        ])
+        .arg(&path)
+        .status()
+        .expect("create animated gif");
+    assert!(status.success(), "ImageMagick failed to create test gif");
+
+    let mut h = Harness::start_with_term_program("xterm-256color", Some("kitty"), "icat-gif");
+    h.run_until(
+        &format!("kitten icat --loop 1 {}", path.display()),
+        Duration::from_secs(1),
+        |h| {
+            h.all_gfx()
+                .iter()
+                .any(|data| data.windows(3).any(|window| window == b"\x1b_G"))
+        },
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    collect_frames(
+        &mut h.stream,
+        &mut h.read_buf,
+        Instant::now() + Duration::from_secs(1),
+        &mut h.frames,
+    );
+    let commands = h.all_gfx();
+    assert!(
+        commands
+            .iter()
+            .any(|data| data.windows(4).any(|window| window == b"a=f,")),
+        "kitten icat did not send animation frame data"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|data| data.windows(4).any(|window| window == b"a=a,")),
+        "kitten icat did not start terminal animation playback"
+    );
+    let _ = fs::remove_file(path);
 }

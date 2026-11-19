@@ -106,8 +106,12 @@ impl Key {
                 if m.alt {
                     out.push(0x1b);
                 }
-                let ch = if m.shift && c.is_ascii_lowercase() {
-                    c.to_ascii_uppercase()
+                let ch = if m.shift {
+                    if c.is_ascii_lowercase() {
+                        c.to_ascii_uppercase()
+                    } else {
+                        shifted_char(*c).unwrap_or(*c)
+                    }
                 } else {
                     *c
                 };
@@ -177,6 +181,34 @@ fn xterm_modifier(m: Modifiers) -> Option<u8> {
         | (u8::from(m.ctrl) << 2)
         | (u8::from(m.super_key) << 3);
     if bits == 0 { None } else { Some(bits + 1) }
+}
+
+/// maps a base key to the glyph a legacy terminal emits when shift is held.
+fn shifted_char(c: char) -> Option<char> {
+    Some(match c {
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        ',' => '<',
+        '.' => '>',
+        '[' => '{',
+        ']' => '}',
+        '-' => '_',
+        '=' => '+',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        '/' => '?',
+        '`' => '~',
+        _ => return None,
+    })
 }
 
 /// maps a character to its ascii control code, if it has one.

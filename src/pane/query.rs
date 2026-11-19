@@ -11,7 +11,6 @@ use std::sync::{
 /// forever.
 const SIXEL_BIT: u8 = 1 << 0;
 const KITTY_BIT: u8 = 1 << 1;
-const ITERM2_BIT: u8 = 1 << 2;
 
 /// shared graphics-capability snapshot, read on every probe answer.
 pub type GraphicsProbe = Arc<AtomicU8>;
@@ -21,7 +20,6 @@ pub fn graphics_code(graphics: crate::util::outer_term::OuterGraphics) -> u8 {
     match graphics {
         crate::util::outer_term::OuterGraphics::Kitty => KITTY_BIT,
         crate::util::outer_term::OuterGraphics::Sixel => SIXEL_BIT,
-        crate::util::outer_term::OuterGraphics::Iterm2 => ITERM2_BIT,
         crate::util::outer_term::OuterGraphics::Tmux
         | crate::util::outer_term::OuterGraphics::Unknown => 0,
     }
@@ -159,10 +157,10 @@ impl QueryResponder {
         bytes: &[u8],
         pty_writer: &mut W,
         screen: Option<ScreenState>,
-    ) {
+    ) -> std::io::Result<()> {
         for &b in bytes {
             if self.osc_state.is_some() {
-                self.osc_write_byte(b, pty_writer);
+                self.osc_write_byte(b, pty_writer)?;
                 continue;
             }
             if let Some(terminator) = self.string_state {
@@ -171,7 +169,7 @@ impl QueryResponder {
                         if b == b'\\' && self.string_esc {
                             self.buf.pop();
                         }
-                        self.respond_kitty_query(&self.buf, pty_writer);
+                        self.respond_kitty_query(&self.buf, pty_writer)?;
                     }
                     self.string_state = None;
                     self.string_esc = false;
@@ -232,8 +230,8 @@ impl QueryResponder {
                     da1.extend_from_slice(b";52");
                 }
                 da1.extend_from_slice(b";22c");
-                let _ = pty_writer.write_all(&da1);
-                let _ = pty_writer.flush();
+                pty_writer.write_all(&da1)?;
+                pty_writer.flush()?;
             }
             // csi > q: XTVERSION query, answer with our real identity so
             // apps that probe terminal type can see it (they must be tolerant
@@ -241,18 +239,18 @@ impl QueryResponder {
             // lie to applications that gate graphics on this)
             else if self.buf.ends_with(b"\x1b[>q") || self.buf.ends_with(b"\x1b[>0q") {
                 let resp = format!("\x1bP>|{}({})\x1b\\", self.xtversion, self.xtversion_ver);
-                let _ = pty_writer.write_all(resp.as_bytes());
-                let _ = pty_writer.flush();
+                pty_writer.write_all(resp.as_bytes())?;
+                pty_writer.flush()?;
             }
             // csi > c / csi > 0 c: secondary device attributes -> vt220, firmware version 1, rom 0
             else if self.buf.ends_with(b"\x1b[>c") || self.buf.ends_with(b"\x1b[>0c") {
-                let _ = pty_writer.write_all(b"\x1b[>1;1;0c");
-                let _ = pty_writer.flush();
+                pty_writer.write_all(b"\x1b[>1;1;0c")?;
+                pty_writer.flush()?;
             }
             // csi 5 n: device status report -> status ok (\x1b[0n)
             else if self.buf.ends_with(b"\x1b[5n") {
-                let _ = pty_writer.write_all(b"\x1b[0n");
-                let _ = pty_writer.flush();
+                pty_writer.write_all(b"\x1b[0n")?;
+                pty_writer.flush()?;
             }
             // csi 6 n: cursor position report, 1-based row;col
             else if self.buf.ends_with(b"\x1b[6n") {
@@ -265,15 +263,15 @@ impl QueryResponder {
                     })
                     .unwrap_or((1, 1));
                 let resp = format!("\x1b[{row};{col}R");
-                let _ = pty_writer.write_all(resp.as_bytes());
-                let _ = pty_writer.flush();
+                pty_writer.write_all(resp.as_bytes())?;
+                pty_writer.flush()?;
             }
             // csi 18 t: report terminal size in characters -> csi 8 ; rows ; cols t
             else if self.buf.ends_with(b"\x1b[18t") {
                 let (rows, cols) = screen.map(|s| (s.rows, s.cols)).unwrap_or((24, 80));
                 let resp = format!("\x1b[8;{rows};{cols}t");
-                let _ = pty_writer.write_all(resp.as_bytes());
-                let _ = pty_writer.flush();
+                pty_writer.write_all(resp.as_bytes())?;
+                pty_writer.flush()?;
             }
             // csi 14 t: report terminal size in pixels
             else if self.buf.ends_with(b"\x1b[14t") {
@@ -281,15 +279,15 @@ impl QueryResponder {
                 let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
                 let (h, w) = (u32::from(rows) * cell_h, u32::from(cols) * cell_w);
                 let resp = format!("\x1b[4;{h};{w}t");
-                let _ = pty_writer.write_all(resp.as_bytes());
-                let _ = pty_writer.flush();
+                pty_writer.write_all(resp.as_bytes())?;
+                pty_writer.flush()?;
             }
             // csi 16 t: report cell size in pixels
             else if self.buf.ends_with(b"\x1b[16t") {
                 let (cell_w, cell_h) = crate::util::outer_term::cell_pixel_size();
                 let resp = format!("\x1b[6;{};{}t", cell_h, cell_w);
-                let _ = pty_writer.write_all(resp.as_bytes());
-                let _ = pty_writer.flush();
+                pty_writer.write_all(resp.as_bytes())?;
+                pty_writer.flush()?;
             }
             // dcs $ q q st: DECRQM request for cursor shape, answer "block" (2)
             // formatted as: dcs ? Ps ; Pm $ y st where Ps=0 (request OK) and Pm=2 (block)
@@ -303,21 +301,21 @@ impl QueryResponder {
                 let term_len = if self.buf.ends_with(b"\x07") { 1 } else { 2 };
                 let payload = &self.buf[start + 2..self.buf.len() - term_len];
                 if payload == b"$q q" {
-                    let _ = pty_writer.write_all(b"\x1bP1$r2 q\x1b\\");
-                    let _ = pty_writer.flush();
+                    pty_writer.write_all(b"\x1bP1$r2 q\x1b\\")?;
+                    pty_writer.flush()?;
                 }
             }
             // csi ? 12 $ p: DECRQM request for cursor blink mode (12), answer "off" (0)
             else if self.buf.ends_with(b"\x1b[?12$p") {
-                let _ = pty_writer.write_all(b"\x1b[?12;0$y");
-                let _ = pty_writer.flush();
+                pty_writer.write_all(b"\x1b[?12;0$y")?;
+                pty_writer.flush()?;
             }
             // sixel geometry and attributes query (csi ? 4 S / csi ? 2 S)
             else if self.buf.ends_with(b"\x1b[?4S") || self.buf.ends_with(b"\x1b[?2S") {
                 // report sixel graphics available: color registers (1024), max width/height (1920x1080)
                 if self.sixel() {
-                    let _ = pty_writer.write_all(b"\x1b[?1;0;1024S");
-                    let _ = pty_writer.flush();
+                    pty_writer.write_all(b"\x1b[?1;0;1024S")?;
+                    pty_writer.flush()?;
                 }
             }
             // kitty graphics protocol query: apc _g ... a=q ... st
@@ -328,23 +326,28 @@ impl QueryResponder {
                 let term_len = if self.buf.ends_with(b"\x07") { 1 } else { 2 };
                 let payload = &self.buf[start + 2..self.buf.len() - term_len];
                 if payload.starts_with(b"G") {
-                    self.respond_kitty_query(payload, pty_writer);
+                    self.respond_kitty_query(payload, pty_writer)?;
                 }
             }
         }
+        Ok(())
     }
 
     /// answers OSC 10 (default foreground) and OSC 11 (default background)
     /// with the current theme colors so apps don't wait the full probe
     /// timeout before drawing (chafa blocks on this answer).
-    fn osc_write_byte<W: Write + ?Sized>(&mut self, b: u8, pty_writer: &mut W) {
+    fn osc_write_byte<W: Write + ?Sized>(
+        &mut self,
+        b: u8,
+        pty_writer: &mut W,
+    ) -> std::io::Result<()> {
         if self.osc_esc && b == b'\\' {
-            self.osc_handle(pty_writer);
-            return;
+            self.osc_handle(pty_writer)?;
+            return Ok(());
         }
         if b == 0x07 {
-            self.osc_handle(pty_writer);
-            return;
+            self.osc_handle(pty_writer)?;
+            return Ok(());
         }
         self.osc_esc = b == 0x1b;
         self.osc_buf.push(b);
@@ -354,9 +357,10 @@ impl QueryResponder {
             self.osc_esc = false;
             self.osc_buf.clear();
         }
+        Ok(())
     }
 
-    fn osc_handle<W: Write + ?Sized>(&mut self, pty_writer: &mut W) {
+    fn osc_handle<W: Write + ?Sized>(&mut self, pty_writer: &mut W) -> std::io::Result<()> {
         let buf = std::mem::take(&mut self.osc_buf);
         self.osc_state = None;
         self.osc_esc = false;
@@ -371,17 +375,22 @@ impl QueryResponder {
             None
         };
         if let Some(resp) = resp {
-            let _ = pty_writer.write_all(&resp);
-            let _ = pty_writer.flush();
+            pty_writer.write_all(&resp)?;
+            pty_writer.flush()?;
         }
+        Ok(())
     }
 
-    fn respond_kitty_query<W: Write + ?Sized>(&self, payload: &[u8], pty_writer: &mut W) {
+    fn respond_kitty_query<W: Write + ?Sized>(
+        &self,
+        payload: &[u8],
+        pty_writer: &mut W,
+    ) -> std::io::Result<()> {
         let Some(payload) = payload.strip_prefix(b"G") else {
-            return;
+            return Ok(());
         };
         let Ok(s) = std::str::from_utf8(payload) else {
-            return;
+            return Ok(());
         };
         // only explicit capability queries (a=q) may be answered; never respond to
         // transmit/display commands, which carry no query intent.
@@ -399,9 +408,11 @@ impl QueryResponder {
                 match k {
                     "a" => is_query = v == "q",
                     "i" => {
-                        let Ok(id) = v.parse::<u32>() else { return };
+                        let Ok(id) = v.parse::<u32>() else {
+                            return Ok(());
+                        };
                         if id == 0 {
-                            return;
+                            return Ok(());
                         }
                         img_id = Some(id);
                     }
@@ -413,10 +424,10 @@ impl QueryResponder {
             }
         }
         if !is_query {
-            return;
+            return Ok(());
         }
         let Some(img_id) = img_id else {
-            return;
+            return Ok(());
         };
 
         // if the outer terminal can't do kitty graphics (or it can't be known
@@ -424,9 +435,9 @@ impl QueryResponder {
         // instead of vomiting megabytes of image bytes as text.
         if !self.kitty() {
             let resp = format!("\x1b_Gi={img_id};ENOENT:kitty graphics not available\x1b\\");
-            let _ = pty_writer.write_all(resp.as_bytes());
-            let _ = pty_writer.flush();
-            return;
+            pty_writer.write_all(resp.as_bytes())?;
+            pty_writer.flush()?;
+            return Ok(());
         }
 
         // build response echoing back supported feature flags.
@@ -442,11 +453,16 @@ impl QueryResponder {
             if queried_cursor_policy {
                 resp.push_str(",C=1");
             }
+        } else if self.xtversion == "kitty"
+            && let Some(action) = feature_action.filter(|action| matches!(*action, "f" | "a" | "c"))
+        {
+            resp.push_str(&format!(",e={action}"));
         }
         resp.push_str(";OK\x1b\\");
 
-        let _ = pty_writer.write_all(resp.as_bytes());
-        let _ = pty_writer.flush();
+        pty_writer.write_all(resp.as_bytes())?;
+        pty_writer.flush()?;
+        Ok(())
     }
 }
 

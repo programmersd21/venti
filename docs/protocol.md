@@ -13,7 +13,8 @@ every message on the unix socket has a 4-byte little-endian length prefix follow
 +-----------------------------------+-----------------------------------+
 ```
 
-maximum payload size is clamped to prevent memory exhaustion from malformed frames.
+maximum payload size is 32 MiB (`MAX_FRAME_SIZE`). the decoder checks the length
+before allocating payload storage and rejects oversized frames.
 
 ## handshake
 
@@ -21,12 +22,13 @@ maximum payload size is clamped to prevent memory exhaustion from malformed fram
 2. client sends `ClientMsg::Hello`:
    - `protocol`: protocol version number
    - `term`: terminal identifier (e.g. `foot`, `xterm-256color`)
+   - `env`: currently includes the host `TERM_PROGRAM` identity when set
    - `colorterm`: truecolor support flags
    - `size`: initial terminal dimensions `(cols, rows)`
    - `cell_pixel`: pixel size of individual character cells `(width, height)`
 3. server responds with `ServerMsg::HelloAck`:
    - `session`: session name confirmation
-   - `graphics`: capability bitmask detected for outer terminal
+   - `graphics`: capability bitmask detected from the attached client's `TERM` and `TERM_PROGRAM`
 
 ## message types
 

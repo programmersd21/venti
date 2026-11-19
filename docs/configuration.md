@@ -8,7 +8,7 @@ venti stores its configuration in `~/.config/venti/config.toml`. settings can be
 [general]
 shell = ""               # defaults to $SHELL, falls back to /bin/sh
 scrollback = 10000       # scrollback line buffer per pane
-graphics = true          # enable high-performance sixel graphics
+graphics = true          # enable kitty and sixel graphics forwarding
 profile = "beginner"     # "beginner", "hypr", "vim", or "dev"
 
 [decorations]

@@ -14,10 +14,9 @@ pub enum CursorShape {
 pub enum GfxFormat {
     Sixel,
     Kitty,
-    Iterm2,
 }
 
-/// a graphics protocol escape sequence (sixel, kitty, or iterm2) anchored to a
+/// a graphics protocol escape sequence (sixel or kitty) anchored to a
 /// cell position, forwarded verbatim to clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GfxCmd {
@@ -67,8 +66,8 @@ pub struct ScreenUpdate {
     pub cursor_shape: CursorShape,
     pub cells: Vec<CellDiff>,
     pub full_redraw: bool,
-    /// graphics escape sequences to draw after the cell diff (sixel, kitty,
-    /// iterm2). emitted after cells so images draw on top.
+    /// graphics escape sequences to draw after the cell diff. emitted after
+    /// cells so images draw on top.
     pub gfx: Vec<GfxCmd>,
     /// when set, the client emits a DECSTR soft reset before painting, so
     /// stale modes/attributes from an exited application are dropped. must NOT

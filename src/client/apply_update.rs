@@ -171,11 +171,8 @@ fn apply_update_inner<W: Write>(
         out.queue(SetAttribute(Attribute::Reset))?;
         out.write_all(b"\x1b[39m\x1b[49m\x1b[59m")?;
         out.queue(Clear(ClearType::All))?;
-        // note: kitty graphics images live in a separate image plane and are
-        // NOT erased by ed. the application owns their lifetime (it deletes
-        // them itself with a=d). deleting them here on every full redraw
-        // would wipe images the application placed with unicode placeholders
-        // (U=1), which re-appear by re-writing the placeholder cells.
+        // ED2 clears Kitty images too. the server re-emits retained placements
+        // after this clear; other text erases leave Kitty images untouched.
         state.fg = ColorState::Default;
         state.bg = ColorState::Default;
         state.underline_color = ColorState::Default;
@@ -361,12 +358,7 @@ fn forward_gfx(
     use crate::util::outer_term::OuterGraphics;
     match passthrough {
         OuterGraphics::Tmux => Some(Cow::Owned(wrap_tmux_passthrough(&g.data))),
-        // in kitty mode, forward both kitty protocol AND iterm2 format
-        // (some tools output iterm2 format in kitty terminals too)
-        OuterGraphics::Kitty if matches!(g.format, GfxFormat::Kitty | GfxFormat::Iterm2) => {
-            Some(Cow::Borrowed(g.data.as_slice()))
-        }
-        OuterGraphics::Iterm2 if g.format == GfxFormat::Iterm2 => {
+        OuterGraphics::Kitty if g.format == GfxFormat::Kitty => {
             Some(Cow::Borrowed(g.data.as_slice()))
         }
         OuterGraphics::Sixel if g.format == GfxFormat::Sixel => {
