@@ -60,6 +60,20 @@ fn wait_for_mode(core: &ServerCore, enabled: bool) {
     }
 }
 
+fn wait_for_child_process(core: &ServerCore, name: &str) {
+    let pane = core.session.panes.get(&PaneId(1)).expect("pane exists");
+    let pid = pane.child_pid.expect("pane has a child");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if comm.trim() == name {
+            return;
+        }
+        assert!(Instant::now() < deadline, "pane child never became {name}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn wait_for_text(core: &ServerCore, needle: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -82,7 +96,7 @@ fn paste_wraps_bytes_when_pane_enabled_bracketed_paste() {
     // the shell so od inherits mode 2004 enabled.
     input(&mut core, b"printf '\\033[?2004h'; exec od -An -tx1c\n");
     wait_for_mode(&core, true);
-    std::thread::sleep(Duration::from_millis(800));
+    wait_for_child_process(&core, "od");
 
     core.handle_event(CoreEvent::ClientPaste {
         client_id: 0,
@@ -106,7 +120,7 @@ fn paste_is_verbatim_when_pane_has_no_bracketed_paste() {
     let mut core = new_core("paste-raw-test");
     // no mode-set sequence; the default shell has no bracketed paste
     input(&mut core, b"exec od -An -tx1c\n");
-    std::thread::sleep(Duration::from_millis(800));
+    wait_for_child_process(&core, "od");
 
     core.handle_event(CoreEvent::ClientPaste {
         client_id: 0,
