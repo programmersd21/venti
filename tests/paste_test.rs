@@ -102,8 +102,9 @@ fn paste_wraps_bytes_when_pane_enabled_bracketed_paste() {
         client_id: 0,
         bytes: b"VERIFY\n".to_vec(),
     });
-    // send ctrl-d to flush od's output buffer
-    input(&mut core, b"\x04");
+    // two ctrl-d bytes: the first delivers any unterminated paste tail
+    // (the closing marker has no newline), the second is eof for od
+    input(&mut core, b"\x04\x04");
     // od prints bracketed-paste markers: ESC[200~ = 1b 5b 32 30 30 7e
     // with double spaces between values in some od implementations
     wait_for_text(&core, "1b");
@@ -126,8 +127,9 @@ fn paste_is_verbatim_when_pane_has_no_bracketed_paste() {
         client_id: 0,
         bytes: b"VERIFY\n".to_vec(),
     });
-    // send ctrl-d to flush od's output buffer
-    input(&mut core, b"\x04");
+    // two ctrl-d bytes: the first delivers any unterminated paste tail
+    // (the closing marker has no newline), the second is eof for od
+    input(&mut core, b"\x04\x04");
     // od prints hex bytes separated by spaces, no paste markers anywhere
     wait_for_text(&core, "56");
     wait_for_text(&core, "45");
