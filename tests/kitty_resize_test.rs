@@ -107,7 +107,7 @@ fn kitty_image_reappears_after_resize() {
     fs::create_dir_all(&home_dir).expect("home dir");
     fs::write(
         home_dir.join("placeholder.sh"),
-        r#"printf '\033_Ga=T,f=100,s=1,v=1,i=7,p=5,U=1,c=1,r=1,q=2;iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\033\\'; printf '\033[38;5;7m\033[58;5;5m\xf4\x8e\xbb\xae\xcc\x85\xcc\x85\033[39m\n'"#,
+        r#"printf '\033_Ga=T,f=100,s=1,v=1,i=7,p=5,U=1,c=1,r=1,q=2;iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\033\\'; printf '\033[38;5;7m\033[58;5;5m\364\216\273\256\314\205\314\205\033[39m\n'"#,
     )
     .expect("write placeholder script");
     fs::write(
